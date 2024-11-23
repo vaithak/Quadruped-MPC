@@ -1,1 +1,1 @@
-# Model Predicitve control for Quadruped
+# Model Predictive control for Quadruped
