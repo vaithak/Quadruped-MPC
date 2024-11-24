@@ -14,7 +14,7 @@ def setup_plant_and_builder(
     controller_class,
     dt = 0.1,
     disable_gravity=True,
-    mu = 0.0,
+    mu = 0.5,
 ):
     """
     Load and visualize a URDF file using Drake's MeshcatVisualizer
@@ -54,7 +54,7 @@ def setup_plant_and_builder(
     # Turn off gravity
     if disable_gravity:
         g = plant.mutable_gravity_field()
-        g.set_gravity_vector([0,0,0])
+        g.set_gravity_vector([0,0,-0.1])
 
     # Finalize the plant
     plant.Finalize()
@@ -117,6 +117,47 @@ def setup_plant_and_builder(
         builder.Connect(plant.get_state_output_port(),
                         controller.GetInputPort("quadruped_state"))
 
+    ### PID Controller
+    from pydrake.systems.controllers import PidController
+    from pydrake.all import JointIndex
+    kp = 0.25 * np.ones(12)
+    ki = 0.01 * np.ones(12)
+    kd = 0.0 * np.ones(12)
+    S = np.zeros((24, 37))
+    j = 0
+    num_q = plant.num_positions()
+    for i in range(plant.num_joints()):
+        joint = plant.get_joint(JointIndex(i))
+        if joint.num_positions() != 1:
+            continue
+        S[j, joint.position_start()] = 1
+        S[12 + j, num_q + joint.velocity_start()] = 1
+        j += 1
+
+    control = builder.AddSystem(
+        PidController(
+            kp=kp,
+            ki=ki,
+            kd=kd,
+            state_projection=S,
+            output_projection=plant.MakeActuationMatrix()[6:, :].T,
+        ),
+    )
+    print("plant.MakeActuationMatrix()", plant.MakeActuationMatrix())
+    print("shape", plant.MakeActuationMatrix().shape)
+    print("plant.MakeActuationMatrix()[6:, :].T", plant.MakeActuationMatrix()[6:, :].T)
+    print("S: ", S)
+
+    # Set name for controller
+    control.set_name("controller")
+
+    builder.Connect(
+        plant.get_state_output_port(), control.get_input_port_estimated_state()
+    )
+    builder.Connect(control.get_output_port(), plant.get_actuation_input_port())
+
+    ####
+
     # Add the visualizer
     vis_params = MeshcatVisualizerParams(publish_period=0.01)
     MeshcatVisualizer.AddToBuilder(builder, scene_graph, meshcat, params=vis_params)
@@ -126,9 +167,9 @@ def setup_plant_and_builder(
     display(SVG(pydot.graph_from_dot_data(
         diagram.GetGraphvizString(max_depth=2))[0].create_svg()))
 
-    return plant, diagram, scene_graph
+    return S, plant, diagram, scene_graph
 
-def simulate(plant, diagram, init_state, init_state_dot, sim_time):
+def simulate(S, plant, diagram, init_state, init_state_dot, sim_time):
     """
     Run the simulation
     
@@ -141,18 +182,41 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
     """
     simulator = Simulator(diagram)
     simulator.Initialize()
-    simulator.set_target_realtime_rate(0.1)
+    simulator.set_target_realtime_rate(1.0)
 
     # Set the robot state
+    context = simulator.get_mutable_context()
     plant_context = diagram.GetMutableSubsystemContext(
-            plant, simulator.get_mutable_context())
+            plant, context)
     print("init_state", init_state)
     print("num_positions", plant.num_positions())
     plant.SetPositions(plant_context, init_state)
     plant.SetVelocities(plant_context, init_state_dot)
 
+    # Print the current coordinates
+    x0 = plant.get_state_output_port().Eval(plant_context)
+    print("Initial state:")
+    print(x0)
+
+    # Desired x0
+    des = S @ x0
+
+    x0 = np.array([ 0.0, -0.8, 1.6, 0.0, -0.8, 1.6 , 0.0 , -0.8, 1.6, 0.0, -0.8 , 1.6,  0. ,  0.,
+  0. ,  0. ,  0.  , 0.,   0.   ,0.   ,0. ,  0. ,  0. ,  0. ])
+
+    print(np.linalg.norm(des - x0))
+    control = diagram.GetSubsystemByName("controller")
+    control.get_input_port_desired_state().FixValue(
+        diagram.GetMutableSubsystemContext(control, context), x0
+    )
+
     # Simulate the robot
     simulator.AdvanceTo(sim_time)
+
+    # Print the final state
+    x1 = plant.get_state_output_port().Eval(plant_context)
+    print("Final state:")
+    print(x1)
 
 if __name__ == "__main__":
     # Replace with your URDF path
@@ -161,14 +225,14 @@ if __name__ == "__main__":
     planner_class = None
     controller_class = None
 
-    plant, diagram, scene_graph = setup_plant_and_builder(urdf_path, planner_class, controller_class)
+    S, plant, diagram, scene_graph = setup_plant_and_builder(urdf_path, planner_class, controller_class)
     q = np.zeros((plant.num_positions(),))
     q = np.asarray([1.0, 0.0, 0.0, 0.0,     # base orientation
-                    0.0, 0.0, 0.3,          # base position
-                    0.0, 0.0, 0.0,          # lf leg
-                    0.0, 0.0, 0.0,          # rf leg
-                    0.0, 0.0, 0.0,          # lh leg
-                    0.0, 0.0, 0.0])         # rh leg
+                    0.0, 0.0, 0.29,          # base position
+                    0.0, -0.8, 1.6,          # lf leg
+                    0.0, -0.8, 1.6,          # rf leg
+                    0.0, -0.8, 1.6,          # lh leg
+                    0.0, -0.8, 1.6])         # rh leg
     qd = np.zeros((plant.num_velocities(),))
     """
     q[1] = 0.0
@@ -178,5 +242,5 @@ if __name__ == "__main__":
     q[5] = theta
     q[6] = -2 * theta
     """
-    simulate(plant, diagram, q, qd, 10.0)
+    simulate(S, plant, diagram, q, qd, 50.0)
 
