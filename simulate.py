@@ -6,7 +6,8 @@ from pydrake.all import Simulator, DiagramBuilder, AddMultibodyPlantSceneGraph,\
                         Parser, RigidTransform, MeshcatVisualizer, MeshcatVisualizerParams,\
                         HalfSpace, CoulombFriction, StartMeshcat, Box, Sphere, GeometryInstance,\
                         GeometryFrame, MakePhongIllustrationProperties
-import importlib
+import planner
+import controller
 
 def setup_plant_and_builder(
     urdf_path, 
@@ -60,6 +61,7 @@ def setup_plant_and_builder(
     plant.Finalize()
 
     # Add custom visualizations for the trunk frame
+    frame_ids = {}
     if planner_class is not None:
         trunk_source = scene_graph.RegisterSource("trunk")
         trunk_frame = GeometryFrame("trunk")
@@ -86,14 +88,16 @@ def setup_plant_and_builder(
             scene_graph.RegisterFrame(trunk_source, foot_frame)
             foot_shape = Sphere(0.02)
             X_foot = RigidTransform()
+            foot_color = np.array([0.1,0.1,0.1,0.4])
             foot_geometry = GeometryInstance(X_foot,foot_shape,foot)
+            foot_geometry.set_illustration_properties(MakePhongIllustrationProperties(foot_color))
             scene_graph.RegisterGeometry(trunk_source, foot_frame.id(), foot_geometry)
             frame_ids[foot] = foot_frame.id()
 
     # Create high-level trunk-model planner
     planner = None
     if planner_class is not None:
-        planner = builder.AddSystem(planner_class(trunk_frame_ids))
+        planner = builder.AddSystem(planner_class(frame_ids))
 
     # Add the controller
     controller = None
@@ -103,19 +107,20 @@ def setup_plant_and_builder(
     # Connect the trunk-model planner to the scene graph
     if planner is not None:
         builder.Connect(
-                planner.GetOutputPort("trunk_geometry"),
+                planner.get_output_port_by_name("trunk_geometry"),
                 scene_graph.get_source_pose_port(trunk_source))
 
     # Connect the planner to the controller
     if controller is not None and planner is not None:
-        builder.Connect(planner.GetOutputPort("trunk_trajectory"), controller.get_input_port(1))
+        builder.Connect(planner.get_output_port_by_name("trunk_trajectory"), 
+                        controller.get_input_port_by_name("trunk_input"))
 
     # Connect the controller to the plant
     if controller is not None:
-        builder.Connect(controller.GetOutputPort("quadruped_torques"),
+        builder.Connect(controller.get_output_port_by_name("quadruped_torques"),
                         plant.get_actuation_input_port())
         builder.Connect(plant.get_state_output_port(),
-                        controller.GetInputPort("quadruped_state"))
+                        controller.get_input_port_by_name("quadruped_state"))
 
     # Add the visualizer
     vis_params = MeshcatVisualizerParams(publish_period=0.01)
@@ -165,8 +170,8 @@ if __name__ == "__main__":
     # Replace with your URDF path
     urdf_path = "mini_cheetah_simple.urdf"
     
-    planner_class = None
-    controller_class = None
+    planner_class = planner.Planner
+    controller_class = controller.Controller
 
     plant, diagram, scene_graph = setup_plant_and_builder(urdf_path, planner_class, controller_class)
     q = np.zeros((plant.num_positions(),))
@@ -177,13 +182,9 @@ if __name__ == "__main__":
                     0.0, -0.8, 1.6,          # lh leg
                     0.0, -0.8, 1.6])         # rh leg
     qd = np.zeros((plant.num_velocities(),))
-    """
-    q[1] = 0.0
-    theta = -np.arccos(q[1])
-    q[3] = theta
-    q[4] = -2 * theta
-    q[5] = theta
-    q[6] = -2 * theta
-    """
+    
+    # Initial com z-velocity - for experiments
+    qd[5] = 0.0
+
     simulate(plant, diagram, q, qd, 50.0)
 
