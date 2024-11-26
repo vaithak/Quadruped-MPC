@@ -151,12 +151,12 @@ class Controller(LeafSystem):
 
         # Convert the forces to world frame
         # for i in range(4):
-        #     R_i = self.plant.CalcRelativeTransform(
-        #             self.plant_context,
-        #             self.plant.world_frame(),
-        #             self.plant.GetBodyByName("body").body_frame()
-        #         ).rotation().matrix()
-            # forces[i] = R_i.T @ forces[i]
+            # R_i = self.plant.CalcRelativeTransform(
+            #         self.plant_context,
+            #         self.plant.world_frame(),
+            #         self.plant.GetBodyByName("body").body_frame()
+            #     ).rotation().matrix()
+            # forces[i] = R_i @ forces[i]
         print(np.round(forces, 2))
 
         # Calculate the torques because of the forces

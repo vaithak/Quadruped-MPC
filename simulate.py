@@ -10,12 +10,13 @@ import planner
 import controller
 
 def setup_plant_and_builder(
-    urdf_path, 
-    planner_class, 
+    urdf_path,
+    ground_urdf_path,
+    planner_class,
     controller_class,
     dt = 0.05,
     mpc_horizon_length = 5,
-    gravity_value = 9.0,
+    gravity_value = 5.0,
     mu = 0.5,
 ):
     """
@@ -38,21 +39,9 @@ def setup_plant_and_builder(
     parser = Parser(plant)
     parser.AddModels(urdf_path)
 
-    # Add collision geometry for the flat ground with friction
-    X_WG = HalfSpace.MakePose(np.array([0,0,1]), np.array([0,0,0]))
-    plant.RegisterCollisionGeometry(
-        plant.world_body(), 
-        X_WG, HalfSpace(), 
-        "ground_collision", 
-        CoulombFriction(static_friction = mu, dynamic_friction = mu)
-    )
-    plant.RegisterVisualGeometry(
-        plant.world_body(),
-        X_WG,
-        HalfSpace(),
-        "ground_visual",
-        np.array([0.5,0.5,0.5,0.6])
-    )
+    # Add collision geometry using ground.urdf
+    ground = parser.AddModels(ground_urdf_path)
+
     # Turn off gravity
     g = plant.mutable_gravity_field()
     g.set_gravity_vector([0,0,-gravity_value])
@@ -188,11 +177,12 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
 if __name__ == "__main__":
     # Replace with your URDF path
     urdf_path = "mini_cheetah_simple.urdf"
+    ground_urdf_path = "ground.urdf"
     
     planner_class = planner.Planner
     controller_class = controller.Controller
 
-    plant, diagram, scene_graph = setup_plant_and_builder(urdf_path, planner_class, controller_class)
+    plant, diagram, scene_graph = setup_plant_and_builder(urdf_path, ground_urdf_path, planner_class, controller_class)
     q = np.zeros((plant.num_positions(),))
     q = np.asarray([1.0, 0.0, 0.0, 0.0,     # base orientation
                     0.0, 0.0, 0.3,          # base position
