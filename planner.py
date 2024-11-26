@@ -14,11 +14,12 @@ class Planner(LeafSystem):
     - Trunk trajectory (Vector valued): Desired positions, velocities and accelerations as a dictionary
     - Trunk geometry (Vector valued): To set the geometry of the trunk in the scene graph for visualization
     """
-    def __init__(self, trunk_frame_ids: dict, mode: int = 0):
+    def __init__(self, trunk_frame_ids: dict, mode: int = 0, horizon_length: int = 10):
         LeafSystem.__init__(self)
 
         self.trunk_frame_ids_dict = trunk_frame_ids
         self.mode = mode
+        self.horizon_length = horizon_length
 
         # For geometry, we need a FramePoseVector
         fpv = FramePoseVector()
@@ -59,8 +60,8 @@ class Planner(LeafSystem):
         self.output_trajectory = {
             "p_lf": np.array([0.175,  0.11, 0.0]), # Left front foot
             "p_rf": np.array([0.175, -0.11, 0.0]), # Right front foot
-            "p_lh": np.array([-0.2,   0.11, 0.0]), # Left hind foot
-            "p_rh": np.array([-0.2,  -0.11, 0.0]), # Right hind foot
+            "p_lh": np.array([-0.203,   0.11, 0.0]), # Left hind foot
+            "p_rh": np.array([-0.203,  -0.11, 0.0]), # Right hind foot
 
             "v_lf": np.array([0.0, 0.0, 0.0]), # Left front foot
             "v_rf": np.array([0.0, 0.0, 0.0]), # Right front foot
@@ -79,6 +80,7 @@ class Planner(LeafSystem):
             "a_com": np.array([0.0, 0.0, 0.0]), # Center of mass
 
             "rpy": np.array([0.0, 0.0, 0.0]), # Roll, pitch, yaw
+            "omega": np.array([0.0, 0.0, 0.0]), # Angular velocity
         }
 
 

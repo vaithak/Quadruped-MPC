@@ -16,11 +16,43 @@ class Controller(LeafSystem):
     - Quadruped torques: The torques to be applied to the quadruped model
     """
 
-    def __init__(self, plant, dt):
+    def __init__(
+            self, 
+            plant, 
+            dt,
+            mpc_horizon_length, # In number of discrete steps
+            gravity_value, # Gravity value
+            mu, # Friction coefficient
+        ):
         LeafSystem.__init__(self)
         self.plant = plant
         self.plant_context = plant.CreateDefaultContext()
         self.dt = dt
+        self.mpc_horizon_length = mpc_horizon_length
+        self.gravity_value = gravity_value
+        self.mu = mu
+
+        # Get the mass and inertia of the trunk
+        self.mass = plant.CalcTotalMass(self.plant_context)
+        I_moment = plant.GetBodyByName('body').CalcSpatialInertiaInBodyFrame(self.plant_context).CalcRotationalInertia().CopyToFullMatrix3()
+        self.I_moment_inv = np.linalg.inv(I_moment)
+
+        # Get the actuation matrix
+        self.B = plant.MakeActuationMatrix()
+
+        # Linearized dynamics
+        # States are: (for trunk rigid body only)
+        # 1. 3D angular position
+        # 2. 3D linear position
+        # 3. 3D angular velocity
+        # 4. 3D linear velocity
+        # 5. Extra gravity term (1D)
+        # This makes the state 13 dimensional
+        self.mpc_state_dim = 13
+
+        # Control inputs are:
+        # 3D forces on each foot - 12 dimensional
+        self.mpc_control_dim = 12
 
         # Quadruped state and trunk trajectory input ports
         self.input_ports = {
@@ -44,6 +76,12 @@ class Controller(LeafSystem):
             ).get_index()
         }
 
+        # Store current state
+        self.x_curr = np.zeros(self.mpc_state_dim)
+
+        # Store current foot positions
+        self.foot_positions = []
+
 
     def get_output_port_by_name(self, name):
         """
@@ -59,46 +97,265 @@ class Controller(LeafSystem):
         return self.get_input_port(self.input_ports[name])
 
 
-    def UpdateStoredContext(self, context):
+    def UpdateStoredContextAndState(self, context):
         """
         Update the stored context with the current context
         """
         state = self.EvalVectorInput(context, self.input_ports["quadruped_state"]).get_value()
         self.plant.SetPositionsAndVelocities(self.plant_context, state)
+
+        # Get the current state
+        curr_pose = self.plant.GetBodyByName("body").EvalPoseInWorld(self.plant_context)
+        curr_vel  = self.plant.GetBodyByName("body").EvalSpatialVelocityInWorld(self.plant_context)
+        self.x_curr[0:3]  = curr_pose.rotation().ToRollPitchYaw().vector()
+        self.x_curr[3:6]  = curr_pose.translation()
+        self.x_curr[6:9]  = curr_vel.rotational()
+        self.x_curr[9:12] = curr_vel.translational()
+        self.x_curr[12] = self.gravity_value
+
+        # Get the foot positions
+        self.foot_positions = [
+            self.plant.GetBodyByName("LF_FOOT").EvalPoseInWorld(self.plant_context).translation(),
+            self.plant.GetBodyByName("RF_FOOT").EvalPoseInWorld(self.plant_context).translation(),
+            self.plant.GetBodyByName("LH_FOOT").EvalPoseInWorld(self.plant_context).translation(),
+            self.plant.GetBodyByName("RH_FOOT").EvalPoseInWorld(self.plant_context).translation()
+        ]
         
 
     def CalcQuadrupedTorques(self, context, output):
         """
         Calculate the torques to be applied to the quadruped model
         """
-        # Update the stored context
-        self.UpdateStoredContext(context)
-        q = self.plant.GetPositions(self.plant_context)
-        v = self.plant.GetVelocities(self.plant_context)
+        # Update the stored context and state
+        self.UpdateStoredContextAndState(context)
 
         # Get the trunk trajectory
         trunk_trajectory = self.EvalAbstractInput(context, self.input_ports["trunk_input"]).get_value()
 
         # Calculate the torques
-        torques = self.ControlLaw(q, v, trunk_trajectory)
+        torques = self.ControlLaw(trunk_trajectory)
 
         # Set the torques
         output.SetFromVector(torques)
 
 
-    def ControlLaw(self, q, v, trunk_trajectory):
+    def ControlLaw(self, trunk_trajectory):
         """
         Implement the control law
         """
-        # Get the trunk trajectory
-        p_lf = trunk_trajectory["p_lf"]
-        p_rf = trunk_trajectory["p_rf"]
-        p_lh = trunk_trajectory["p_lh"]
-        p_rh = trunk_trajectory["p_rh"]
+        # Calculate contact forces for each foot in body frame
+        forces = self.CalcForcesMPC(trunk_trajectory)
 
-        # Contact of feet
-        contact_vector = trunk_trajectory["contact_states"]
+        # Get the contact states
+        contact_states = trunk_trajectory["contact_states"]
 
-        # Calculate the torques
-        torques = np.zeros(self.plant.num_actuators())
+        # Convert the forces to world frame
+        # for i in range(4):
+        #     R_i = self.plant.CalcRelativeTransform(
+        #             self.plant_context,
+        #             self.plant.world_frame(),
+        #             self.plant.GetBodyByName("body").body_frame()
+        #         ).rotation().matrix()
+            # forces[i] = R_i.T @ forces[i]
+        print(np.round(forces, 2))
+
+        # Calculate the torques because of the forces
+        foot_Js = self.CalcFootTranslationJacobians()
+        u = np.zeros(foot_Js[0].shape[1])
+        for i in range(4):
+            if contact_states[i]:
+                u += -foot_Js[i].T @ forces[i] # - because we need to apply forces in opposite direction"
+
+        # Calculate torques because of swing controller
+        # TODO: Implement the swing controller
+
+        # Use actuation matrix to get the torques
+        torques = self.B.T @ u
+
         return torques
+    
+
+    def CalcForcesMPC(self, trunk_trajectory):
+        """
+        Calculate the contact forces for each foot using Model Predictive Control
+        """
+        # Get the contact states
+        contact_states = trunk_trajectory["contact_states"]
+
+        # Initialize mathematical program and decalre decision variables
+        prog = MathematicalProgram()
+        x = np.zeros((self.mpc_horizon_length, self.mpc_state_dim), dtype=Variable)
+        for i in range(self.mpc_horizon_length):
+            x[i] = prog.NewContinuousVariables(self.mpc_state_dim, "x_" + str(i))
+        f = np.zeros((self.mpc_horizon_length-1, self.mpc_control_dim), dtype=Variable)
+        for i in range(self.mpc_horizon_length-1):
+            f[i] = prog.NewContinuousVariables(self.mpc_control_dim, "f_" + str(i))
+
+        # Create x_i_ref for all time steps
+        def GetReferenceState(trunk_trajectory, i):
+            """
+            Get the reference state at time i
+            # TODO: use i to get the reference state
+            """
+            x_ref = np.zeros(self.mpc_state_dim)
+            x_ref[0:3] = trunk_trajectory["rpy"]
+            x_ref[3:6] = trunk_trajectory["p_com"]
+            x_ref[6:9] = trunk_trajectory["omega"]
+            x_ref[9:12] = trunk_trajectory["v_com"]
+            x_ref[12] = self.gravity_value
+
+            return x_ref
+
+        x_ref = np.zeros((self.mpc_horizon_length, self.mpc_state_dim))
+        for i in range(self.mpc_horizon_length):
+            x_ref[i] = GetReferenceState(trunk_trajectory, i)
+        
+        ######### Add the dynamics constraints #########
+        for i in range(self.mpc_horizon_length-1):
+            A_i, B_i = self.DiscreteTimeLinearizedDynamics(trunk_trajectory, i)
+            prog.AddLinearEqualityConstraint(x[i+1] - A_i @ x[i] - B_i @ f[i], np.zeros(self.mpc_state_dim))
+
+        ######### Add the force constraints on non-contact feet #########
+        # For creating a constraint D_i @ f_i = 0, to zero out the 
+        # forces when the foot is not in contact
+        for i in range(self.mpc_horizon_length-1):
+            D_i = np.zeros((self.mpc_control_dim, self.mpc_control_dim))
+            for j in range(4):
+                if not contact_states[j]:
+                    D_i[j*3:j*3+3, j*3:j*3+3] = np.eye(3)
+            prog.AddLinearEqualityConstraint(D_i @ f[i], np.zeros(self.mpc_control_dim))
+
+        ######### Add the force limits on contact feet #########
+        # force_z is within f_min and f_max, and the force_x and force_y
+        # are within the friction cone
+        f_min = -50
+        f_max = 50
+        for i in range(self.mpc_horizon_length-1):
+            for j in range(4):
+                if contact_states[j]:
+                    # f_z is within f_min and f_max
+                    prog.AddBoundingBoxConstraint(f_min, f_max, f[i][j*3+2])
+
+                    # f_x within the friction cone
+                    prog.AddLinearConstraint(f[i][j*3] <= self.mu * f[i][j*3+2])
+                    prog.AddLinearConstraint(-self.mu * f[i][j*3+2] <= f[i][j*3])
+
+                    # f_y within the friction cone
+                    prog.AddLinearConstraint(f[i][j*3+1] <= self.mu * f[i][j*3+2])
+                    prog.AddLinearConstraint(-self.mu * f[i][j*3+2] <= f[i][j*3+1])
+
+        ######### Add the initial state constraint #########
+        # derived from the current state of the robot
+        prog.AddLinearEqualityConstraint(x[0] - self.x_curr, np.zeros(self.mpc_state_dim))
+
+        ######### Add the cost function #########
+        Q = 1 * np.eye(self.mpc_state_dim)
+        R = 0 * np.eye(self.mpc_control_dim)
+
+        for i in range(self.mpc_horizon_length):
+            prog.AddQuadraticCost((x[i] - x_ref[i]).T @ Q @ (x[i] - x_ref[i]))
+            if i < self.mpc_horizon_length-1:
+                prog.AddQuadraticCost(f[i].T @ R @ f[i])
+
+        ######### Solve the optimization problem #########
+        solver = OsqpSolver()
+        prog.SetSolverOption(solver.id(), "max_iter", 1000)
+
+        result = solver.Solve(prog)
+
+        forces = np.zeros(self.mpc_control_dim)
+        if not result.is_success():
+            raise RuntimeError("MPC failed to find a solution")
+        else:
+            forces = result.GetSolution(f[0])
+
+        return forces.reshape((4, 3))
+
+
+    def CalcFootTranslationJacobians(self):
+        """
+        Calculate the foot translation Jacobians
+        """
+        # Get the foot positions
+        foot_names = ["LF_FOOT", "RF_FOOT", "LH_FOOT", "RH_FOOT"]
+
+        # Calculate the foot translation Jacobians
+        J = []
+        for foot in foot_names:
+            J.append(self.plant.CalcJacobianTranslationalVelocity(
+                self.plant_context,
+                JacobianWrtVariable.kV,
+                self.plant.GetFrameByName(foot),
+                np.zeros(3),
+                self.plant.world_frame(),
+                self.plant.world_frame()
+            ))
+        return J
+    
+
+    def ContinuosTimeLinearizedDynamics(self, trunk_trajectory, horizon_idx):
+        """
+        Calculate the continuous time linearized dynamics at horizon_idx of the trajectory
+        """
+        
+
+        A = np.zeros((self.mpc_state_dim, self.mpc_state_dim))
+        B = np.zeros((self.mpc_state_dim, self.mpc_control_dim))
+
+        ######### Fill in the A matrix #########
+        # Linear Velocity Dynamics
+        A[3:6, self.mpc_state_dim-4:self.mpc_state_dim-1] = np.eye(3)
+
+        # Linear Acceleration Dynamics - just gravity
+        A[9:12, self.mpc_state_dim-1] = np.array([0, 0, -1])
+
+        # Angular Velocity Dynamics
+        # yaw = trunk_trajectory["rpy"][2] # TODO: Use horizon_idx to get the yaw
+        yaw = self.x_curr[2]
+        R_yaw = np.array([
+            [np.cos(yaw), -np.sin(yaw), 0],
+            [np.sin(yaw), np.cos(yaw), 0],
+            [0, 0, 1]
+        ])
+        A[0:3, 6:9] = R_yaw.T
+        ######### Fill in the A matrix #########
+
+        ######### Fill in the B matrix #########
+        # Linear Acceleration Dynamics
+        B[9:12, :] = np.hstack([np.eye(3), np.eye(3), np.eye(3), np.eye(3)]) / self.mass
+
+        # Angular Acceleration Dynamics
+        # Calculate moment of inertia in world frame
+        I_moment_world_inv = R_yaw @ self.I_moment_inv @ R_yaw.T
+        
+        # TODO: Use horizon_idx to get the positions here
+        # com = trunk_trajectory["p_com"]
+        com = self.x_curr[3:6]
+        for i in range(4):
+            r = self.foot_positions[i] - com
+            r_cross = np.array([
+                [0, -r[2], r[1]],
+                [r[2], 0, -r[0]],
+                [-r[1], r[0], 0]
+            ])
+            B[6:9, i*3:i*3+3] = I_moment_world_inv @ r_cross
+
+        ######### Fill in the B matrix #########
+        return A, B
+
+
+    def DiscreteTimeLinearizedDynamics(self, trunk_trajectory, horizon_idx):
+        """
+        Calculate the discrete time linearized dynamics at horizon_idx of the trajectory
+        """
+        Ac, Bc = self.ContinuosTimeLinearizedDynamics(trunk_trajectory, horizon_idx)
+        dt = self.dt
+
+        # Euler integration
+        A = np.eye(Ac.shape[0]) + dt * Ac
+        B = dt * Bc
+
+        return A, B
+
+
+        

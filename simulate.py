@@ -5,7 +5,7 @@ from IPython.display import SVG, display
 from pydrake.all import Simulator, DiagramBuilder, AddMultibodyPlantSceneGraph,\
                         Parser, RigidTransform, MeshcatVisualizer, MeshcatVisualizerParams,\
                         HalfSpace, CoulombFriction, StartMeshcat, Box, Sphere, GeometryInstance,\
-                        GeometryFrame, MakePhongIllustrationProperties
+                        GeometryFrame, MakePhongIllustrationProperties, ContactVisualizer
 import planner
 import controller
 
@@ -13,8 +13,9 @@ def setup_plant_and_builder(
     urdf_path, 
     planner_class, 
     controller_class,
-    dt = 0.1,
-    disable_gravity=True,
+    dt = 0.05,
+    mpc_horizon_length = 5,
+    gravity_value = 9.0,
     mu = 0.5,
 ):
     """
@@ -50,12 +51,11 @@ def setup_plant_and_builder(
         X_WG,
         HalfSpace(),
         "ground_visual",
-        np.array([0.5,0.5,0.5,0.0])
+        np.array([0.5,0.5,0.5,0.6])
     )
     # Turn off gravity
-    if disable_gravity:
-        g = plant.mutable_gravity_field()
-        g.set_gravity_vector([0,0,0])
+    g = plant.mutable_gravity_field()
+    g.set_gravity_vector([0,0,-gravity_value])
 
     # Finalize the plant
     plant.Finalize()
@@ -102,7 +102,15 @@ def setup_plant_and_builder(
     # Add the controller
     controller = None
     if controller_class is not None:
-        controller = builder.AddSystem(controller_class(plant, dt))
+        controller = builder.AddSystem(
+            controller_class(
+                plant,
+                dt,
+                mpc_horizon_length = mpc_horizon_length,
+                gravity_value = gravity_value,
+                mu = mu
+            )
+        )
 
     # Connect the trunk-model planner to the scene graph
     if planner is not None:
@@ -125,6 +133,8 @@ def setup_plant_and_builder(
     # Add the visualizer
     vis_params = MeshcatVisualizerParams(publish_period=0.01)
     MeshcatVisualizer.AddToBuilder(builder, scene_graph, meshcat, params=vis_params)
+    # Visualize the contact forces
+    ContactVisualizer.AddToBuilder(builder, plant, meshcat)
 
     # Compile and plot the diagram
     diagram = builder.Build()
@@ -146,7 +156,7 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
     """
     simulator = Simulator(diagram)
     simulator.Initialize()
-    simulator.set_target_realtime_rate(1.0)
+    simulator.set_target_realtime_rate(0.1)
 
     # Set the robot state
     context = simulator.get_mutable_context()
@@ -157,10 +167,19 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
     plant.SetPositions(plant_context, init_state)
     plant.SetVelocities(plant_context, init_state_dot)
 
-    # Print the current coordinates
-    x0 = plant.get_state_output_port().Eval(plant_context)
-    print("Initial state: ")
-    print(x0)
+    # Print the current coordinates of the left front foot
+    # x0 = plant.GetBodyByName("LF_FOOT").EvalPoseInWorld(plant_context).translation()
+    # print("Initial position of the left front foot:", x0)
+    # # Print for right front foot
+    # x0 = plant.GetBodyByName("RF_FOOT").EvalPoseInWorld(plant_context).translation()
+    # print("Initial position of the right front foot:", x0)
+    # # Print for left hind foot
+    # x0 = plant.GetBodyByName("LH_FOOT").EvalPoseInWorld(plant_context).translation()
+    # print("Initial position of the left hind foot:", x0)
+    # # Print for right hind foot
+    # x0 = plant.GetBodyByName("RH_FOOT").EvalPoseInWorld(plant_context).translation()
+    # print("Initial position of the right hind foot:", x0)
+
 
     # Simulate the robot
     simulator.AdvanceTo(sim_time)
@@ -186,5 +205,5 @@ if __name__ == "__main__":
     # Initial com z-velocity - for experiments
     qd[5] = 0.0
 
-    simulate(plant, diagram, q, qd, 50.0)
+    simulate(plant, diagram, q, qd, 10.0)
 
