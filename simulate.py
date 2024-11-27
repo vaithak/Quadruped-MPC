@@ -42,8 +42,6 @@ def setup_plant_and_builder(
     # Add collision geometry using ground.urdf
     parser.AddModels(ground_urdf_path)
 
-    plant.set_discrete_contact_approximation(DiscreteContactApproximation.kLagged)
-
     # Turn off gravity
     g = plant.mutable_gravity_field()
     g.set_gravity_vector([0,0,-gravity_value])

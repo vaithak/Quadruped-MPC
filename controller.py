@@ -1,7 +1,7 @@
 import numpy as np
 from pydrake.all import *
 
-DEBUG = False
+DEBUG = True
 
 class Controller(LeafSystem):
     """
@@ -56,6 +56,11 @@ class Controller(LeafSystem):
         # 3D forces on each foot - 12 dimensional
         self.mpc_control_dim = 12
 
+        # Q and R matrices for the cost function
+        # r, p, y, x, y, z, omega_x, omega_y, omega_z, v_x, v_y, v_z, g
+        self.Q = np.diag([1.0, 1.0, 1.0, 10.0, 10.0, 2.0, 1.0, 1.0, 1.0, 10.0, 10.0, 10.0, 1.0])
+        self.R = 1e-6 * np.eye(self.mpc_control_dim)
+
         # Quadruped state and trunk trajectory input ports
         self.input_ports = {
             "quadruped_state": self.DeclareVectorInputPort(
@@ -81,11 +86,16 @@ class Controller(LeafSystem):
         # Store current state
         self.x_curr = np.zeros(self.mpc_state_dim)
 
-        # Store current foot positions
+        # Store current foot positions and velocities in world frame
         self.foot_positions = []
+        self.foot_velocities = []
 
-        # Store the rotation matrix from world to body frame
-        self.R_world_to_body = np.eye(3)
+        # Store the transformation matrix from world to body frame
+        self.X_world_to_body = RigidTransform()
+
+        # Kp, Kd for the swing controller
+        self.Kp_swing = 200.0 * np.eye(3)
+        self.Kd_swing = 20.0 * np.eye(3)
 
 
     def get_output_port_by_name(self, name):
@@ -131,8 +141,16 @@ class Controller(LeafSystem):
             self.plant.GetBodyByName("RH_FOOT").EvalPoseInWorld(self.plant_context).translation()
         ]
 
+        # Get the foot velocities
+        self.foot_velocities = [
+            self.plant.GetBodyByName("LF_FOOT").EvalSpatialVelocityInWorld(self.plant_context).translational(),
+            self.plant.GetBodyByName("RF_FOOT").EvalSpatialVelocityInWorld(self.plant_context).translational(),
+            self.plant.GetBodyByName("LH_FOOT").EvalSpatialVelocityInWorld(self.plant_context).translational(),
+            self.plant.GetBodyByName("RH_FOOT").EvalSpatialVelocityInWorld(self.plant_context).translational()
+        ]
+
         # Get the rotation matrix from world to body frame
-        self.R_world_to_body = curr_pose.rotation().matrix()
+        self.X_world_to_body = curr_pose.inverse()
         
 
     def CalcQuadrupedTorques(self, context, output):
@@ -254,13 +272,10 @@ class Controller(LeafSystem):
         prog.AddLinearEqualityConstraint(x[0] - self.x_curr, np.zeros(self.mpc_state_dim))
 
         ######### Add the cost function #########
-        Q = 1.0 * np.eye(self.mpc_state_dim)
-        R = 0.000 * np.eye(self.mpc_control_dim)
-
         for i in range(self.mpc_horizon_length):
-            prog.AddQuadraticCost((x[i] - x_ref[i]).T @ Q @ (x[i] - x_ref[i]))
+            prog.AddQuadraticCost((x[i] - x_ref[i]).T @ self.Q @ (x[i] - x_ref[i]))
             if i < self.mpc_horizon_length-1:
-                prog.AddQuadraticCost(f[i].T @ R @ f[i])
+                prog.AddQuadraticCost(f[i].T @ self.R @ f[i])
 
         ######### Solve the optimization problem #########
         solver = OsqpSolver()
@@ -322,14 +337,49 @@ class Controller(LeafSystem):
             if contact_states[i]:
                 continue
 
-            # Calculate the torques
-            torque_curr = np.zeros(3)
-
             # Caclulate the desired position, velocity and acceleration
-            # TODO
+            p_des_world = trunk_trajectory["a_" + curr_foot]
+            v_des_world = trunk_trajectory["v_" + curr_foot]
+            a_des_world = trunk_trajectory["a_" + curr_foot]
+            p_curr_world = self.foot_positions[i]
+            v_curr_world = self.foot_velocities[i]
+
+            # Calculate the Jacobian
+            J = self.plant.CalcJacobianTranslationalVelocity(
+                self.plant_context,
+                JacobianWrtVariable.kV,
+                self.plant.GetFrameByName(curr_foot),
+                np.zeros(3),
+                self.plant.world_frame(),
+                self.plant.world_frame()
+            )
+
+            # tau_fb
+            tau_fb = self.Kp_swing @ (self.X_world_to_body.multiply(p_des_world) - self.X_world_to_body.multiply(p_curr_world)) + \
+                        self.Kd_swing @ (self.X_world_to_body.multiply(v_des_world) - self.X_world_to_body.multiply(v_curr_world))
+            
+            # Calculate the inertia matrix only for the current leg
+            Delta_i = self.plant.CalcMassMatrixViaInverseDynamics(self.plant_context)[6 + i*3:6 + i*3 + 3, 6 + i*3:6 + i*3 + 3]
+
+            # Calculate the coriolis and gravity terms only for the current leg
+            Cv_i = self.plant.CalcBiasTerm(self.plant_context)[6 + i*3:6 + i*3 + 3]
+            Gv_i = -self.plant.CalcGravityGeneralizedForces(self.plant_context)[6 + i*3:6 + i*3 + 3]
+
+            # Jdot_qi_dot
+            Jdot_qi_dot = self.plant.CalcBiasTranslationalAcceleration(
+                self.plant_context,
+                JacobianWrtVariable.kV,
+                self.plant.GetFrameByName(curr_foot),
+                np.zeros(3),
+                self.plant.world_frame(),
+                self.plant.world_frame()
+            )
+
+            # tau_ff
+            tau_ff = J.T @ (Delta_i @ (self.X_world_to_body.multiply(a_des_world) - Jdot_qi_dot) + Cv_i + Gv_i)
 
             # Set the desired torque
-            torques[i*3:i*3+3] = torque_curr
+            torques[i*3:i*3+3] = tau_fb + tau_ff
 
         return torques
 
