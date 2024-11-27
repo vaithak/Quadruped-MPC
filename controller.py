@@ -1,6 +1,8 @@
 import numpy as np
 from pydrake.all import *
 
+DEBUG = False
+
 class Controller(LeafSystem):
     """
     Implementing the MPC and swing leg controller for the trunk model.
@@ -82,6 +84,9 @@ class Controller(LeafSystem):
         # Store current foot positions
         self.foot_positions = []
 
+        # Store the rotation matrix from world to body frame
+        self.R_world_to_body = np.eye(3)
+
 
     def get_output_port_by_name(self, name):
         """
@@ -102,6 +107,11 @@ class Controller(LeafSystem):
         Update the stored context with the current context
         """
         state = self.EvalVectorInput(context, self.input_ports["quadruped_state"]).get_value()
+
+        # Print current state
+        if DEBUG:
+            print(np.round(state, 2))
+
         self.plant.SetPositionsAndVelocities(self.plant_context, state)
 
         # Get the current state
@@ -120,6 +130,9 @@ class Controller(LeafSystem):
             self.plant.GetBodyByName("LH_FOOT").EvalPoseInWorld(self.plant_context).translation(),
             self.plant.GetBodyByName("RH_FOOT").EvalPoseInWorld(self.plant_context).translation()
         ]
+
+        # Get the rotation matrix from world to body frame
+        self.R_world_to_body = curr_pose.rotation().matrix()
         
 
     def CalcQuadrupedTorques(self, context, output):
@@ -145,32 +158,24 @@ class Controller(LeafSystem):
         """
         # Calculate contact forces for each foot in body frame
         forces = self.CalcForcesMPC(trunk_trajectory)
+        if DEBUG:
+            print(np.round(forces, 2))
 
         # Get the contact states
         contact_states = trunk_trajectory["contact_states"]
 
-        # Convert the forces to world frame
-        # for i in range(4):
-            # R_i = self.plant.CalcRelativeTransform(
-            #         self.plant_context,
-            #         self.plant.world_frame(),
-            #         self.plant.GetBodyByName("body").body_frame()
-            #     ).rotation().matrix()
-            # forces[i] = R_i @ forces[i]
-        print(np.round(forces, 2))
-
         # Calculate the torques because of the forces
         foot_Js = self.CalcFootTranslationJacobians()
-        u = np.zeros(foot_Js[0].shape[1])
+        u = np.zeros(self.mpc_control_dim)
         for i in range(4):
             if contact_states[i]:
-                u += -foot_Js[i].T @ forces[i] # - because we need to apply forces in opposite direction"
+                u[i*3:i*3+3] = -foot_Js[i].T @ forces[i]
 
         # Calculate torques because of swing controller
         # TODO: Implement the swing controller
 
         # Use actuation matrix to get the torques
-        torques = self.B.T @ u
+        torques = u
 
         return torques
     
@@ -249,8 +254,8 @@ class Controller(LeafSystem):
         prog.AddLinearEqualityConstraint(x[0] - self.x_curr, np.zeros(self.mpc_state_dim))
 
         ######### Add the cost function #########
-        Q = 1 * np.eye(self.mpc_state_dim)
-        R = 0 * np.eye(self.mpc_control_dim)
+        Q = 1.0 * np.eye(self.mpc_state_dim)
+        R = 0.000 * np.eye(self.mpc_control_dim)
 
         for i in range(self.mpc_horizon_length):
             prog.AddQuadraticCost((x[i] - x_ref[i]).T @ Q @ (x[i] - x_ref[i]))
@@ -272,6 +277,63 @@ class Controller(LeafSystem):
         return forces.reshape((4, 3))
 
 
+    """
+    The swing controller computes and follows a trajectory
+    for the foot in the world coordinate system. The controller
+    for tracking the trajectory uses the sum of a feedback and
+    feedforward term to compute joint torques.
+    The control law used to compute joint torques for leg i is
+    τi = Ji.T @ Kp @ (pi,ref_body_frame - pi_body_frame) + Kd(vi,ref_body_frame - vi_body_frame)] + τi,ff
+
+    Where Ji is the Jacobian of the foot i in the body frame,
+    pi,ref_body_frame is the desired position of the foot i in the body frame,
+    pi_body_frame is the current position of the foot i in the body frame,
+    vi,ref_body_frame is the desired velocity of the foot i in the body frame,
+    vi_body_frame is the current velocity of the foot i in the body frame,
+    Kp is the proportional gain positive definite diagonal matrix,
+    Kd is the derivative gain positive definite diagonal matrix,
+    τi,ff is the feedforward torque.
+
+    The feedforward torque is computed as follows:
+    τi,ff = Ji.T @ Λi(ai,ref_body_frame - Ji' @ qi') + Ci @ qi' + Gi
+
+    Where Λi is the opertational space inertia matrix of the foot i in the body frame,
+    ai,ref_body_frame is the desired acceleration of the foot i in the body frame,
+    qi' is the 3d joint velocity of the foot i,
+    Ci is the coriolis and centrifugal forces matrix for the foot i,
+    Gi is the gravity forces matrix for the foot i.
+    """
+    def CalculateTorquesSwingController(self, trunk_trajectory):
+        """
+        Calculate the torques because of the swing controller
+        """
+        # Get the contact states
+        contact_states = trunk_trajectory["contact_states"]
+
+        # Initialize the torques
+        torques = np.zeros(self.mpc_control_dim)
+
+        # Foot names
+        foot_names = ["LF_FOOT", "RF_FOOT", "LH_FOOT", "RH_FOOT"]
+
+        # Calculate the torques for each foot
+        for i in range(4):
+            curr_foot = foot_names[i]
+            if contact_states[i]:
+                continue
+
+            # Calculate the torques
+            torque_curr = np.zeros(3)
+
+            # Caclulate the desired position, velocity and acceleration
+            # TODO
+
+            # Set the desired torque
+            torques[i*3:i*3+3] = torque_curr
+
+        return torques
+
+
     def CalcFootTranslationJacobians(self):
         """
         Calculate the foot translation Jacobians
@@ -281,15 +343,20 @@ class Controller(LeafSystem):
 
         # Calculate the foot translation Jacobians
         J = []
+        i = 0
         for foot in foot_names:
-            J.append(self.plant.CalcJacobianTranslationalVelocity(
+            # Calculate the Jacobian
+            curr_J = self.plant.CalcJacobianTranslationalVelocity(
                 self.plant_context,
                 JacobianWrtVariable.kV,
                 self.plant.GetFrameByName(foot),
                 np.zeros(3),
                 self.plant.world_frame(),
                 self.plant.world_frame()
-            ))
+            )
+            curr_J = curr_J[:, 6 + i*3:6 + i*3 + 3]
+            J.append(curr_J)
+            i += 1
         return J
     
 

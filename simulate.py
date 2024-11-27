@@ -5,7 +5,7 @@ from IPython.display import SVG, display
 from pydrake.all import Simulator, DiagramBuilder, AddMultibodyPlantSceneGraph,\
                         Parser, RigidTransform, MeshcatVisualizer, MeshcatVisualizerParams,\
                         HalfSpace, CoulombFriction, StartMeshcat, Box, Sphere, GeometryInstance,\
-                        GeometryFrame, MakePhongIllustrationProperties, ContactVisualizer
+                        GeometryFrame, MakePhongIllustrationProperties, ContactVisualizer, DiscreteContactApproximation
 import planner
 import controller
 
@@ -15,9 +15,9 @@ def setup_plant_and_builder(
     planner_class,
     controller_class,
     dt = 0.05,
-    mpc_horizon_length = 5,
-    gravity_value = 5.0,
-    mu = 0.5,
+    mpc_horizon_length = 10,
+    gravity_value = .981,
+    mu = 1.0,
 ):
     """
     Load and visualize a URDF file using Drake's MeshcatVisualizer
@@ -40,7 +40,9 @@ def setup_plant_and_builder(
     parser.AddModels(urdf_path)
 
     # Add collision geometry using ground.urdf
-    ground = parser.AddModels(ground_urdf_path)
+    parser.AddModels(ground_urdf_path)
+
+    plant.set_discrete_contact_approximation(DiscreteContactApproximation.kLagged)
 
     # Turn off gravity
     g = plant.mutable_gravity_field()
