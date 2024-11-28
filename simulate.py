@@ -14,9 +14,9 @@ def setup_plant_and_builder(
     ground_urdf_path,
     planner_class,
     controller_class,
-    dt = 0.05,
+    dt = 8e-3,
     mpc_horizon_length = 10,
-    gravity_value = .981,
+    gravity_value = 9.81,
     mu = 1.0,
 ):
     """
@@ -118,6 +118,9 @@ def setup_plant_and_builder(
                         plant.get_actuation_input_port())
         builder.Connect(plant.get_state_output_port(),
                         controller.get_input_port_by_name("quadruped_state"))
+        # Send contact points to the controller
+        builder.Connect(plant.get_contact_results_output_port(),
+                        controller.get_input_port_by_name("contact_results"))
 
     # Add the visualizer
     vis_params = MeshcatVisualizerParams(publish_period=0.01)
@@ -145,7 +148,7 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
     """
     simulator = Simulator(diagram)
     simulator.Initialize()
-    simulator.set_target_realtime_rate(0.1)
+    simulator.set_target_realtime_rate(1.0)
 
     # Set the robot state
     context = simulator.get_mutable_context()
@@ -155,6 +158,9 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
     print("num_positions", plant.num_positions())
     plant.SetPositions(plant_context, init_state)
     plant.SetVelocities(plant_context, init_state_dot)
+
+    # Get the contact results
+    contact_results = plant.get_contact_results_output_port().Eval(plant_context)
 
     # Print the current coordinates of the left front foot
     # x0 = plant.GetBodyByName("LF_FOOT").EvalPoseInWorld(plant_context).translation()
@@ -172,6 +178,13 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
 
     # Simulate the robot
     simulator.AdvanceTo(sim_time)
+
+    print("number of contacts", contact_results.num_point_pair_contacts())
+    for i in range(contact_results.num_point_pair_contacts()):
+        print("contact", i)
+        print("point on A", contact_results.point_pair_contact_info(i).point_pair().p_WCa)
+        print("point on B", contact_results.point_pair_contact_info(i).point_pair().p_WCb)
+        print("force", contact_results.point_pair_contact_info(i).contact_force())
 
 
 if __name__ == "__main__":
@@ -195,5 +208,5 @@ if __name__ == "__main__":
     # Initial com z-velocity - for experiments
     qd[5] = 0.0
 
-    simulate(plant, diagram, q, qd, 10.0)
+    simulate(plant, diagram, q, qd, 20.0)
 

@@ -58,10 +58,10 @@ class Planner(LeafSystem):
         Generate a standing plan
         """
         self.output_trajectory = {
-            "p_lf": np.array([0.175,  0.11, 0.022]), # Left front foot
-            "p_rf": np.array([0.175, -0.11, 0.022]), # Right front foot
-            "p_lh": np.array([-0.203,   0.11, 0.022]), # Left hind foot
-            "p_rh": np.array([-0.203,  -0.11, 0.022]), # Right hind foot
+            "p_lf": np.array([0.175,  0.11, 0.0]), # Left front foot
+            "p_rf": np.array([0.175, -0.11, 0.0]), # Right front foot
+            "p_lh": np.array([-0.203,   0.11, 0.0]), # Left hind foot
+            "p_rh": np.array([-0.203,  -0.11, 0.0]), # Right hind foot
 
             "v_lf": np.array([0.0, 0.0, 0.0]), # Left front foot
             "v_rf": np.array([0.0, 0.0, 0.0]), # Right front foot

@@ -33,6 +33,7 @@ class Controller(LeafSystem):
         self.mpc_horizon_length = mpc_horizon_length
         self.gravity_value = gravity_value
         self.mu = mu
+        self.world_frame = plant.world_frame()
 
         # Get the mass and inertia of the trunk
         self.mass = plant.CalcTotalMass(self.plant_context)
@@ -58,7 +59,7 @@ class Controller(LeafSystem):
 
         # Q and R matrices for the cost function
         # r, p, y, x, y, z, omega_x, omega_y, omega_z, v_x, v_y, v_z, g
-        self.Q = np.diag([1.0, 1.0, 1.0, 10.0, 10.0, 2.0, 1.0, 1.0, 1.0, 10.0, 10.0, 10.0, 1.0])
+        self.Q = np.diag([5., 5., 10., 20., 20., 50., 0.01, 0.01, 0.2, 0.2, 0.2, 0.2, 0.])
         self.R = 1e-6 * np.eye(self.mpc_control_dim)
 
         # Quadruped state and trunk trajectory input ports
@@ -71,6 +72,11 @@ class Controller(LeafSystem):
             "trunk_input": self.DeclareAbstractInputPort(
                 "trunk_input",
                 AbstractValue.Make({})
+            ).get_index(),
+
+            "contact_results": self.DeclareAbstractInputPort(
+                "contact_results",
+                AbstractValue.Make(ContactResults())
             ).get_index()
         }
 
@@ -97,6 +103,9 @@ class Controller(LeafSystem):
         self.Kp_swing = 200.0 * np.eye(3)
         self.Kd_swing = 20.0 * np.eye(3)
 
+        # Store the contact results
+        self.contact_results = ContactResults()
+
 
     def get_output_port_by_name(self, name):
         """
@@ -117,11 +126,6 @@ class Controller(LeafSystem):
         Update the stored context with the current context
         """
         state = self.EvalVectorInput(context, self.input_ports["quadruped_state"]).get_value()
-
-        # Print current state
-        if DEBUG:
-            print(np.round(state, 2))
-
         self.plant.SetPositionsAndVelocities(self.plant_context, state)
 
         # Get the current state
@@ -132,6 +136,9 @@ class Controller(LeafSystem):
         self.x_curr[6:9]  = curr_vel.rotational()
         self.x_curr[9:12] = curr_vel.translational()
         self.x_curr[12] = self.gravity_value
+
+        if DEBUG:
+            print("Current state: \n", np.round(self.x_curr, 2))
 
         # Get the foot positions
         self.foot_positions = [
@@ -162,6 +169,7 @@ class Controller(LeafSystem):
 
         # Get the trunk trajectory
         trunk_trajectory = self.EvalAbstractInput(context, self.input_ports["trunk_input"]).get_value()
+        self.contact_results = self.EvalAbstractInput(context, self.input_ports["contact_results"]).get_value()
 
         # Calculate the torques
         torques = self.ControlLaw(trunk_trajectory)
@@ -177,7 +185,7 @@ class Controller(LeafSystem):
         # Calculate contact forces for each foot in body frame
         forces = self.CalcForcesMPC(trunk_trajectory)
         if DEBUG:
-            print(np.round(forces, 2))
+            print("Forces: \n", np.round(forces, 2))
 
         # Get the contact states
         contact_states = trunk_trajectory["contact_states"]
@@ -196,7 +204,6 @@ class Controller(LeafSystem):
         torques = u
 
         return torques
-    
 
     def CalcForcesMPC(self, trunk_trajectory):
         """
@@ -215,7 +222,7 @@ class Controller(LeafSystem):
             f[i] = prog.NewContinuousVariables(self.mpc_control_dim, "f_" + str(i))
 
         # Create x_i_ref for all time steps
-        def GetReferenceState(trunk_trajectory, i):
+        def GetReferenceState(trunk_trajectory, i, x_curr):
             """
             Get the reference state at time i
             # TODO: use i to get the reference state
@@ -227,11 +234,15 @@ class Controller(LeafSystem):
             x_ref[9:12] = trunk_trajectory["v_com"]
             x_ref[12] = self.gravity_value
 
+            # Compensation for pitch and roll drift
+            x_ref[0] = 0.0 - x_curr[0]
+            x_ref[1] = 0.0 - x_curr[1]
+
             return x_ref
 
         x_ref = np.zeros((self.mpc_horizon_length, self.mpc_state_dim))
         for i in range(self.mpc_horizon_length):
-            x_ref[i] = GetReferenceState(trunk_trajectory, i)
+            x_ref[i] = GetReferenceState(trunk_trajectory, i, self.x_curr)
         
         ######### Add the dynamics constraints #########
         for i in range(self.mpc_horizon_length-1):
@@ -401,8 +412,8 @@ class Controller(LeafSystem):
                 JacobianWrtVariable.kV,
                 self.plant.GetFrameByName(foot),
                 np.zeros(3),
-                self.plant.world_frame(),
-                self.plant.world_frame()
+                self.world_frame,
+                self.world_frame
             )
             curr_J = curr_J[:, 6 + i*3:6 + i*3 + 3]
             J.append(curr_J)
