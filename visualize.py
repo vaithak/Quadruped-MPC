@@ -15,7 +15,7 @@ from pydrake.visualization import AddDefaultVisualization, ModelVisualizer
 # Click the link and a MeshCat tab should appear in your browser.
 meshcat = StartMeshcat()
 
-model_file = "mini_cheetah_simple.urdf"
+model_file = "models/mini_cheetah.urdf"
 
 # Create a model visualizer and add the robot arm.
 visualizer = ModelVisualizer(meshcat=meshcat)

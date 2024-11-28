@@ -189,8 +189,8 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
 
 if __name__ == "__main__":
     # Replace with your URDF path
-    urdf_path = "mini_cheetah_simple.urdf"
-    ground_urdf_path = "ground.urdf"
+    urdf_path = "models/mini_cheetah.urdf"
+    ground_urdf_path = "models/ground.urdf"
     
     planner_class = planner.Planner
     controller_class = controller.Controller
