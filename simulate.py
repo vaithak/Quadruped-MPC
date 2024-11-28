@@ -14,6 +14,7 @@ def setup_plant_and_builder(
     ground_urdf_path,
     planner_class,
     controller_class,
+    planner_mode = 1,
     dt = 8e-3,
     mpc_horizon_length = 10,
     gravity_value = 9.81,
@@ -86,7 +87,13 @@ def setup_plant_and_builder(
     # Create high-level trunk-model planner
     planner = None
     if planner_class is not None:
-        planner = builder.AddSystem(planner_class(frame_ids))
+        planner = builder.AddSystem(
+                        planner_class(
+                            frame_ids, 
+                            mode=planner_mode, 
+                            horizon_length=mpc_horizon_length
+                        )
+                    )
 
     # Add the controller
     controller = None
@@ -148,7 +155,7 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
     """
     simulator = Simulator(diagram)
     simulator.Initialize()
-    simulator.set_target_realtime_rate(1.0)
+    simulator.set_target_realtime_rate(2.0)
 
     # Set the robot state
     context = simulator.get_mutable_context()

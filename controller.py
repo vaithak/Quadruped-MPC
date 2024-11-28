@@ -1,7 +1,7 @@
 import numpy as np
 from pydrake.all import *
 
-DEBUG = True
+DEBUG = False
 
 class Controller(LeafSystem):
     """
@@ -59,7 +59,7 @@ class Controller(LeafSystem):
 
         # Q and R matrices for the cost function
         # r, p, y, x, y, z, omega_x, omega_y, omega_z, v_x, v_y, v_z, g
-        self.Q = np.diag([5., 5., 10., 20., 20., 50., 0.01, 0.01, 0.2, 0.2, 0.2, 0.2, 0.])
+        self.Q = np.diag([5., 5., 10., 20., 20., 50., 2, 2, 2, 2, 2, 2, 0.])
         self.R = 1e-6 * np.eye(self.mpc_control_dim)
 
         # Quadruped state and trunk trajectory input ports
@@ -230,9 +230,12 @@ class Controller(LeafSystem):
             x_ref = np.zeros(self.mpc_state_dim)
             x_ref[0:3] = trunk_trajectory["rpy"]
             x_ref[3:6] = trunk_trajectory["p_com"]
-            x_ref[6:9] = trunk_trajectory["omega"]
             x_ref[9:12] = trunk_trajectory["v_com"]
             x_ref[12] = self.gravity_value
+
+            # Convert from rpy_dot to omega
+            rot_matrix = RollPitchYaw(x_ref[0:3]).ToRotationMatrix().inverse()
+            x_ref[6:9] = rot_matrix @ trunk_trajectory["rpy_dot"]
 
             # Compensation for pitch and roll drift
             x_ref[0] = 0.0 - x_curr[0]

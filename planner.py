@@ -80,8 +80,17 @@ class Planner(LeafSystem):
             "a_com": np.array([0.0, 0.0, 0.0]), # Center of mass
 
             "rpy": np.array([0.0, 0.0, 0.0]), # Roll, pitch, yaw
-            "omega": np.array([0.0, 0.0, 0.0]), # Angular velocity
+            "rpy_dot": np.array([0.0, 0.0, 0.0]), # Roll, pitch, yaw derivatives
         }
+
+    
+    def TurningHeadPlan(self, t):
+        """
+        Generate a plan for turning the head
+        """
+        self.StandingPlan(t)
+        self.output_trajectory["rpy"] = np.array([0.0, 0.0, 0.1 * np.sin(2*t)])
+        self.output_trajectory["rpy_dot"] = np.array([0.0, 0.0, 0.1 * 2 * np.cos(t)])
 
 
     def set_output_trajectory(self, t, mode):
@@ -94,6 +103,8 @@ class Planner(LeafSystem):
         
         if mode == 0:
             self.StandingPlan(t)
+        elif mode == 1:
+            self.TurningHeadPlan(t)
         else:
             raise NotImplementedError("Mode not implemented")
         
