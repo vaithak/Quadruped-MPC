@@ -90,7 +90,7 @@ class Planner(LeafSystem):
         """
         self.StandingPlan(t)
         self.output_trajectory["rpy"] = np.array([0.0, 0.0, 0.1 * np.sin(2*t)])
-        self.output_trajectory["rpy_dot"] = np.array([0.0, 0.0, 0.1 * 2 * np.cos(t)])
+        self.output_trajectory["rpy_dot"] = np.array([0.0, 0.0, 0.1 * 2 * np.cos(2*t)])
 
 
     def set_output_trajectory(self, t, mode):
