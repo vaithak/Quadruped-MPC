@@ -96,9 +96,6 @@ class Controller(LeafSystem):
         self.foot_positions = []
         self.foot_velocities = []
 
-        # Store the transformation matrix from world to body frame
-        self.X_world_to_body = RigidTransform()
-
         # Kp, Kd for the swing controller
         self.Kp_swing = 200.0 * np.eye(3)
         self.Kd_swing = 20.0 * np.eye(3)
@@ -128,6 +125,9 @@ class Controller(LeafSystem):
         state = self.EvalVectorInput(context, self.input_ports["quadruped_state"]).get_value()
         self.plant.SetPositionsAndVelocities(self.plant_context, state)
 
+        # Get the contact results
+        self.contact_results = self.EvalAbstractInput(context, self.input_ports["contact_results"]).get_value()
+
         # Get the current state
         curr_pose = self.plant.GetBodyByName("body").EvalPoseInWorld(self.plant_context)
         curr_vel  = self.plant.GetBodyByName("body").EvalSpatialVelocityInWorld(self.plant_context)
@@ -155,9 +155,6 @@ class Controller(LeafSystem):
             self.plant.GetBodyByName("LH_FOOT").EvalSpatialVelocityInWorld(self.plant_context).translational(),
             self.plant.GetBodyByName("RH_FOOT").EvalSpatialVelocityInWorld(self.plant_context).translational()
         ]
-
-        # Get the rotation matrix from world to body frame
-        self.X_world_to_body = curr_pose.inverse()
         
 
     def CalcQuadrupedTorques(self, context, output):
@@ -169,7 +166,6 @@ class Controller(LeafSystem):
 
         # Get the trunk trajectory
         trunk_trajectory = self.EvalAbstractInput(context, self.input_ports["trunk_input"]).get_value()
-        self.contact_results = self.EvalAbstractInput(context, self.input_ports["contact_results"]).get_value()
 
         # Calculate the torques
         torques = self.ControlLaw(trunk_trajectory)
@@ -373,30 +369,32 @@ class Controller(LeafSystem):
             J_leg = J[:, 6 + i*3:6 + i*3 + 3]
 
             # tau_fb
-            tau_fb = self.Kp_swing @ (self.X_world_to_body.multiply(p_des_world) - self.X_world_to_body.multiply(p_curr_world)) + \
-                        self.Kd_swing @ (self.X_world_to_body.multiply(v_des_world) - self.X_world_to_body.multiply(v_curr_world))
+            tau_fb = self.Kp_swing @ (p_des_world - p_curr_world) + \
+                        self.Kd_swing @ (v_des_world - v_curr_world)
+
             tau_fb = J_leg.T @ tau_fb
             
-            # Calculate the inertia matrix only for the current leg
-            # Delta_i = self.plant.CalcMassMatrixViaInverseDynamics(self.plant_context)[6 + i*3:6 + i*3 + 3, 6 + i*3:6 + i*3 + 3]
+            # Calculate J.T @ Operational Space Inertia Matrix
+            M = self.plant.CalcMassMatrixViaInverseDynamics(self.plant_context)[6 + i*3:6 + i*3 + 3, 6 + i*3:6 + i*3 + 3]
+            J_T_Delta_i = M @ np.linalg.inv(J_leg)
 
             # Calculate the coriolis and gravity terms only for the current leg
-            # Cv_i = self.plant.CalcBiasTerm(self.plant_context)[6 + i*3:6 + i*3 + 3]
-            # Gv_i = -self.plant.CalcGravityGeneralizedForces(self.plant_context)[6 + i*3:6 + i*3 + 3]
+            Cv_i = self.plant.CalcBiasTerm(self.plant_context)[6 + i*3:6 + i*3 + 3]
+            Gv_i = -self.plant.CalcGravityGeneralizedForces(self.plant_context)[6 + i*3:6 + i*3 + 3]
 
             # Jdot_qi_dot
-            # Jdot_qi_dot = self.plant.CalcBiasTranslationalAcceleration(
-            #     self.plant_context,
-            #     JacobianWrtVariable.kV,
-            #     self.plant.GetFrameByName(curr_foot),
-            #     np.zeros(3),
-            #     self.plant.world_frame(),
-            #     self.plant.world_frame()
-            # )
+            Jdot_qi_dot = self.plant.CalcBiasTranslationalAcceleration(
+                self.plant_context,
+                JacobianWrtVariable.kV,
+                self.plant.GetFrameByName(curr_foot),
+                np.zeros(3),
+                self.plant.world_frame(),
+                self.plant.world_frame()
+            ).squeeze()
 
             # tau_ff
             tau_ff = np.zeros(3)
-            # tau_ff = J.T @ (Delta_i @ (self.X_world_to_body.multiply(a_des_world) - Jdot_qi_dot) + Cv_i + Gv_i)
+            tau_ff = J_T_Delta_i @ (a_des_world - Jdot_qi_dot) + Cv_i + Gv_i
 
             # Set the desired torque
             torques[i*3:i*3+3] = tau_fb + tau_ff
