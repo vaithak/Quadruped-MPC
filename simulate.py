@@ -14,7 +14,7 @@ def setup_plant_and_builder(
     ground_urdf_path,
     planner_class,
     controller_class,
-    planner_mode = 0,
+    planner_mode = 2,
     dt = 8e-3,
     mpc_horizon_length = 15,
     gravity_value = 9.81,
@@ -166,32 +166,16 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
     plant.SetPositions(plant_context, init_state)
     plant.SetVelocities(plant_context, init_state_dot)
 
-    # Get the contact results
-    contact_results = plant.get_contact_results_output_port().Eval(plant_context)
-
-    # Print the current coordinates of the left front foot
-    # x0 = plant.GetBodyByName("LF_FOOT").EvalPoseInWorld(plant_context).translation()
-    # print("Initial position of the left front foot:", x0)
-    # # Print for right front foot
-    # x0 = plant.GetBodyByName("RF_FOOT").EvalPoseInWorld(plant_context).translation()
-    # print("Initial position of the right front foot:", x0)
-    # # Print for left hind foot
-    # x0 = plant.GetBodyByName("LH_FOOT").EvalPoseInWorld(plant_context).translation()
-    # print("Initial position of the left hind foot:", x0)
-    # # Print for right hind foot
-    # x0 = plant.GetBodyByName("RH_FOOT").EvalPoseInWorld(plant_context).translation()
-    # print("Initial position of the right hind foot:", x0)
-
-
     # Simulate the robot
     simulator.AdvanceTo(sim_time)
 
-    print("number of contacts", contact_results.num_point_pair_contacts())
-    for i in range(contact_results.num_point_pair_contacts()):
-        print("contact", i)
-        print("point on A", contact_results.point_pair_contact_info(i).point_pair().p_WCa)
-        print("point on B", contact_results.point_pair_contact_info(i).point_pair().p_WCb)
-        print("force", contact_results.point_pair_contact_info(i).contact_force())
+    # Print final coordinates of each foot
+    foot_names = ["LF_FOOT", "RF_FOOT", "LH_FOOT", "RH_FOOT"]
+    for foot_name in foot_names:
+        foot = plant.GetBodyByName(foot_name)
+        x = foot.EvalPoseInWorld(plant_context).translation()
+        print(f"Final position of the {foot_name}:", x)
+    
 
 
 if __name__ == "__main__":
@@ -215,5 +199,5 @@ if __name__ == "__main__":
     # Initial com z-velocity - for experiments
     qd[5] = 0.0
 
-    simulate(plant, diagram, q, qd, 20.0)
+    simulate(plant, diagram, q, qd, 5.0)
 

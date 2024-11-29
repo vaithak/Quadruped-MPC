@@ -58,8 +58,8 @@ class Planner(LeafSystem):
         Generate a standing plan
         """
         self.output_trajectory = {
-            "p_lf": np.array([0.175,  0.11, 0.0]), # Left front foot
-            "p_rf": np.array([0.175, -0.11, 0.0]), # Right front foot
+            "p_lf": np.array([0.176,  0.11, 0.0]), # Left front foot
+            "p_rf": np.array([0.176, -0.11, 0.0]), # Right front foot
             "p_lh": np.array([-0.203,   0.11, 0.0]), # Left hind foot
             "p_rh": np.array([-0.203,  -0.11, 0.0]), # Right hind foot
 
@@ -93,6 +93,24 @@ class Planner(LeafSystem):
         self.output_trajectory["rpy_dot"] = np.array([0.0, 0.0, 0.1 * 2 * np.cos(2*t)])
 
 
+    def RaiseFoot(self, t):
+        """
+        Modify the simple standing output values to lift one foot
+        off the ground.
+        """
+        self.StandingPlan(t)
+        self.output_trajectory["p_com"] += np.array([-0.01, 0.01, 0.0])
+
+        if t > 1 and t < 3:
+            self.output_trajectory["v_rf"] += np.array([ 0.0, 0.0, 0.05])
+            self.output_trajectory["contact_states"] = [True,False,True,True]
+            self.output_trajectory["p_rf"] += np.array([ 0.0, 0.0, 0.05*(t-1)])
+        elif t >= 3:
+            self.output_trajectory["v_rf"] += np.array([ 0.0, 0.0, 0.0])
+            self.output_trajectory["contact_states"] = [True,False,True,True]
+            self.output_trajectory["p_rf"] += np.array([ 0.0, 0.0, 0.1])
+
+
     def set_output_trajectory(self, t, mode):
         """
         Set the output trajectory based on the mode
@@ -105,6 +123,8 @@ class Planner(LeafSystem):
             self.StandingPlan(t)
         elif mode == 1:
             self.TurningHeadPlan(t)
+        elif mode == 2:
+            self.RaiseFoot(t)
         else:
             raise NotImplementedError("Mode not implemented")
         

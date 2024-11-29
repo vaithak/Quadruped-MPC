@@ -196,6 +196,8 @@ class Controller(LeafSystem):
         for i in range(4):
             if contact_states[i]:
                 u[i*3:i*3+3] = -foot_Js[i].T @ forces[i]
+            else:
+                u[i*3:i*3+3] = self.CalculateTorquesSwingController(trunk_trajectory)[i*3:i*3+3]
 
         # Calculate torques because of swing controller
         # TODO: Implement the swing controller
@@ -368,30 +370,33 @@ class Controller(LeafSystem):
                 self.plant.world_frame(),
                 self.plant.world_frame()
             )
+            J_leg = J[:, 6 + i*3:6 + i*3 + 3]
 
             # tau_fb
             tau_fb = self.Kp_swing @ (self.X_world_to_body.multiply(p_des_world) - self.X_world_to_body.multiply(p_curr_world)) + \
                         self.Kd_swing @ (self.X_world_to_body.multiply(v_des_world) - self.X_world_to_body.multiply(v_curr_world))
+            tau_fb = J_leg.T @ tau_fb
             
             # Calculate the inertia matrix only for the current leg
-            Delta_i = self.plant.CalcMassMatrixViaInverseDynamics(self.plant_context)[6 + i*3:6 + i*3 + 3, 6 + i*3:6 + i*3 + 3]
+            # Delta_i = self.plant.CalcMassMatrixViaInverseDynamics(self.plant_context)[6 + i*3:6 + i*3 + 3, 6 + i*3:6 + i*3 + 3]
 
             # Calculate the coriolis and gravity terms only for the current leg
-            Cv_i = self.plant.CalcBiasTerm(self.plant_context)[6 + i*3:6 + i*3 + 3]
-            Gv_i = -self.plant.CalcGravityGeneralizedForces(self.plant_context)[6 + i*3:6 + i*3 + 3]
+            # Cv_i = self.plant.CalcBiasTerm(self.plant_context)[6 + i*3:6 + i*3 + 3]
+            # Gv_i = -self.plant.CalcGravityGeneralizedForces(self.plant_context)[6 + i*3:6 + i*3 + 3]
 
             # Jdot_qi_dot
-            Jdot_qi_dot = self.plant.CalcBiasTranslationalAcceleration(
-                self.plant_context,
-                JacobianWrtVariable.kV,
-                self.plant.GetFrameByName(curr_foot),
-                np.zeros(3),
-                self.plant.world_frame(),
-                self.plant.world_frame()
-            )
+            # Jdot_qi_dot = self.plant.CalcBiasTranslationalAcceleration(
+            #     self.plant_context,
+            #     JacobianWrtVariable.kV,
+            #     self.plant.GetFrameByName(curr_foot),
+            #     np.zeros(3),
+            #     self.plant.world_frame(),
+            #     self.plant.world_frame()
+            # )
 
             # tau_ff
-            tau_ff = J.T @ (Delta_i @ (self.X_world_to_body.multiply(a_des_world) - Jdot_qi_dot) + Cv_i + Gv_i)
+            tau_ff = np.zeros(3)
+            # tau_ff = J.T @ (Delta_i @ (self.X_world_to_body.multiply(a_des_world) - Jdot_qi_dot) + Cv_i + Gv_i)
 
             # Set the desired torque
             torques[i*3:i*3+3] = tau_fb + tau_ff
