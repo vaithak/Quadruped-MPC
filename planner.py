@@ -14,12 +14,13 @@ class Planner(LeafSystem):
     - Trunk trajectory (Vector valued): Desired positions, velocities and accelerations as a dictionary
     - Trunk geometry (Vector valued): To set the geometry of the trunk in the scene graph for visualization
     """
-    def __init__(self, trunk_frame_ids: dict, mode: int = 0, horizon_length: int = 10):
+    def __init__(self, trunk_frame_ids: dict, mode: int = 0, horizon_length: int = 10, dt: float = 5e-3):
         LeafSystem.__init__(self)
 
         self.trunk_frame_ids_dict = trunk_frame_ids
         self.mode = mode
         self.horizon_length = horizon_length
+        self.dt = dt
 
         # For geometry, we need a FramePoseVector
         fpv = FramePoseVector()
@@ -30,7 +31,7 @@ class Planner(LeafSystem):
         self.output_ports = {
             "trunk_trajectory": self.DeclareAbstractOutputPort(
                 "trunk_trajectory",
-                lambda: AbstractValue.Make({}),
+                lambda: AbstractValue.Make([]),
                 self.CalcTrunkTrajectory
             ).get_index(),
 
@@ -41,8 +42,8 @@ class Planner(LeafSystem):
             ).get_index()
         }
 
-        # Output dictionary - will be used by both output ports
-        self.output_trajectory = {}
+        # List of trajectories, one for each time step till the horizon
+        self.horizon_trajectory = []
         self.last_ran = -1.0
 
 
@@ -57,7 +58,7 @@ class Planner(LeafSystem):
         """
         Generate a standing plan
         """
-        self.output_trajectory = {
+        output_trajectory = {
             "p_lf": np.array([0.176,  0.11, 0.0]), # Left front foot
             "p_rf": np.array([0.176, -0.11, 0.0]), # Right front foot
             "p_lh": np.array([-0.203,   0.11, 0.0]), # Left hind foot
@@ -82,15 +83,18 @@ class Planner(LeafSystem):
             "rpy": np.array([0.0, 0.0, 0.0]), # Roll, pitch, yaw
             "rpy_dot": np.array([0.0, 0.0, 0.0]), # Roll, pitch, yaw derivatives
         }
+        return output_trajectory
 
     
     def TurningHeadPlan(self, t):
         """
         Generate a plan for turning the head
         """
-        self.StandingPlan(t)
-        self.output_trajectory["rpy"] = np.array([0.0, 0.0, 0.1 * np.sin(2*t)])
-        self.output_trajectory["rpy_dot"] = np.array([0.0, 0.0, 0.1 * 2 * np.cos(2*t)])
+        output_trajectory = self.StandingPlan(t)
+        output_trajectory["rpy"] = np.array([0.0, 0.0, 0.1 * np.sin(t)])
+        output_trajectory["rpy_dot"] = np.array([0.0, 0.0, 0.1 * np.cos(t)])
+
+        return output_trajectory
 
 
     def RaiseFoot(self, t):
@@ -98,17 +102,19 @@ class Planner(LeafSystem):
         Modify the simple standing output values to lift one foot
         off the ground.
         """
-        self.StandingPlan(t)
-        self.output_trajectory["p_com"] += np.array([-0.01, 0.01, 0.0])
+        output_trajectory = self.StandingPlan(t)
+        output_trajectory["p_com"] += np.array([-0.01, 0.01, 0.0])
 
         if t > 1 and t < 3:
-            self.output_trajectory["v_rf"] += np.array([ 0.0, 0.0, 0.05])
-            self.output_trajectory["contact_states"] = [True,False,True,True]
-            self.output_trajectory["p_rf"] += np.array([ 0.0, 0.0, 0.05*(t-1)])
+            output_trajectory["v_rf"] += np.array([ 0.0, 0.0, 0.05])
+            output_trajectory["contact_states"] = [True,False,True,True]
+            output_trajectory["p_rf"] += np.array([ 0.0, 0.0, 0.05*(t-1)])
         elif t >= 3:
-            self.output_trajectory["v_rf"] += np.array([ 0.0, 0.0, 0.0])
-            self.output_trajectory["contact_states"] = [True,False,True,True]
-            self.output_trajectory["p_rf"] += np.array([ 0.0, 0.0, 0.1])
+            output_trajectory["v_rf"] += np.array([ 0.0, 0.0, 0.0])
+            output_trajectory["contact_states"] = [True,False,True,True]
+            output_trajectory["p_rf"] += np.array([ 0.0, 0.0, 0.1])
+
+        return output_trajectory
 
 
     def set_output_trajectory(self, t, mode):
@@ -119,14 +125,24 @@ class Planner(LeafSystem):
         if self.last_ran == t:
             return
         
+        # Choose the function based on the mode
         if mode == 0:
-            self.StandingPlan(t)
+            trajectory_fxn = self.StandingPlan
         elif mode == 1:
-            self.TurningHeadPlan(t)
+            trajectory_fxn = self.TurningHeadPlan
         elif mode == 2:
-            self.RaiseFoot(t)
+            trajectory_fxn = self.RaiseFoot
         else:
             raise NotImplementedError("Mode not implemented")
+
+        # Generate the plan based on the mode
+        curr_len = len(self.horizon_trajectory)
+        if curr_len == 0:
+            for i in range(self.horizon_length):
+                self.horizon_trajectory.append(trajectory_fxn(t + i * self.dt))
+        else:
+            self.horizon_trajectory.pop(0)
+            self.horizon_trajectory.append(trajectory_fxn(t + self.horizon_length * self.dt))
         
         # Update the last ran time
         self.last_ran = t
@@ -142,7 +158,7 @@ class Planner(LeafSystem):
         self.set_output_trajectory(t, self.mode)
 
         # Set the output to the port
-        output.set_value(self.output_trajectory)
+        output.set_value(self.horizon_trajectory)
 
     
     def CalcTrunkGeometry(self, context, output):
@@ -155,20 +171,23 @@ class Planner(LeafSystem):
         # Set the output trajectory
         self.set_output_trajectory(t, self.mode)
 
+        # Current output trajectory
+        output_trajectory = self.horizon_trajectory[0]
+
         # Create a FramePoseVector
         fpv = FramePoseVector()
         
         # Set the trunk frame
         trunk_transform = RigidTransform()
-        trunk_transform.set_translation(self.output_trajectory["p_com"])
-        trunk_transform.set_rotation(RollPitchYaw(self.output_trajectory["rpy"]).ToRotationMatrix())
+        trunk_transform.set_translation(output_trajectory["p_com"])
+        trunk_transform.set_rotation(RollPitchYaw(output_trajectory["rpy"]).ToRotationMatrix())
         fpv.set_value(self.trunk_frame_ids_dict["trunk"], trunk_transform)
 
         # Set the foot frames
         for frame_name in ["lf", "rf", "lh", "rh"]:
             frame_id = self.trunk_frame_ids_dict[frame_name]
             foot_transform = RigidTransform()
-            foot_transform.set_translation(self.output_trajectory[f"p_{frame_name}"])
+            foot_transform.set_translation(output_trajectory[f"p_{frame_name}"])
             fpv.set_value(frame_id, foot_transform)
 
         # Set the output to the port

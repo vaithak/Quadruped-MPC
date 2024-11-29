@@ -91,7 +91,8 @@ def setup_plant_and_builder(
                         planner_class(
                             frame_ids, 
                             mode=planner_mode, 
-                            horizon_length=mpc_horizon_length
+                            horizon_length=mpc_horizon_length,
+                            dt=dt,
                         )
                     )
 
@@ -199,5 +200,5 @@ if __name__ == "__main__":
     # Initial com z-velocity - for experiments
     qd[5] = 0.0
 
-    simulate(plant, diagram, q, qd, 5.0)
+    simulate(plant, diagram, q, qd, 20.0)
 

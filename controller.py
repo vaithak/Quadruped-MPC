@@ -59,8 +59,8 @@ class Controller(LeafSystem):
 
         # Q and R matrices for the cost function
         # r, p, y, x, y, z, omega_x, omega_y, omega_z, v_x, v_y, v_z, g
-        self.Q = np.diag([5., 5., 10., 20., 20., 50., 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, .0])
-        self.R = 5e-7 * np.eye(self.mpc_control_dim)
+        self.Q = np.diag([5., 5., 10., 20., 20., 50., 2, 2, 2, 2, 2, 2, .0])
+        self.R = 1e-6 * np.eye(self.mpc_control_dim)
 
         # Quadruped state and trunk trajectory input ports
         self.input_ports = {
@@ -71,7 +71,7 @@ class Controller(LeafSystem):
 
             "trunk_input": self.DeclareAbstractInputPort(
                 "trunk_input",
-                AbstractValue.Make({})
+                AbstractValue.Make([])
             ).get_index(),
 
             "contact_results": self.DeclareAbstractInputPort(
@@ -184,7 +184,7 @@ class Controller(LeafSystem):
             print("Forces: \n", np.round(forces, 2))
 
         # Get the contact states
-        contact_states = trunk_trajectory["contact_states"]
+        contact_states = trunk_trajectory[0]["contact_states"]
 
         # Calculate the torques because of the forces
         foot_Js = self.CalcFootTranslationJacobians()
@@ -195,9 +195,6 @@ class Controller(LeafSystem):
             else:
                 u[i*3:i*3+3] = self.CalculateTorquesSwingController(trunk_trajectory)[i*3:i*3+3]
 
-        # Calculate torques because of swing controller
-        # TODO: Implement the swing controller
-
         # Use actuation matrix to get the torques
         torques = u
 
@@ -207,9 +204,6 @@ class Controller(LeafSystem):
         """
         Calculate the contact forces for each foot using Model Predictive Control
         """
-        # Get the contact states
-        contact_states = trunk_trajectory["contact_states"]
-
         # Initialize mathematical program and decalre decision variables
         prog = MathematicalProgram()
         x = np.zeros((self.mpc_horizon_length, self.mpc_state_dim), dtype=Variable)
@@ -226,14 +220,14 @@ class Controller(LeafSystem):
             # TODO: use i to get the reference state
             """
             x_ref = np.zeros(self.mpc_state_dim)
-            x_ref[0:3] = trunk_trajectory["rpy"]
-            x_ref[3:6] = trunk_trajectory["p_com"]
-            x_ref[9:12] = trunk_trajectory["v_com"]
+            x_ref[0:3] = trunk_trajectory[i]["rpy"]
+            x_ref[3:6] = trunk_trajectory[i]["p_com"]
+            x_ref[9:12] = trunk_trajectory[i]["v_com"]
             x_ref[12] = self.gravity_value
 
             # Convert from rpy_dot to omega
             rot_matrix = RollPitchYaw(x_ref[0:3]).ToRotationMatrix().inverse()
-            x_ref[6:9] = rot_matrix @ trunk_trajectory["rpy_dot"]
+            x_ref[6:9] = rot_matrix @ trunk_trajectory[i]["rpy_dot"]
 
             # Compensation for pitch and roll drift
             x_ref[0] = 0.0 - x_curr[0]
@@ -255,6 +249,7 @@ class Controller(LeafSystem):
         # forces when the foot is not in contact
         for i in range(self.mpc_horizon_length-1):
             D_i = np.zeros((self.mpc_control_dim, self.mpc_control_dim))
+            contact_states = trunk_trajectory[i]["contact_states"]
             for j in range(4):
                 if not contact_states[j]:
                     D_i[j*3:j*3+3, j*3:j*3+3] = np.eye(3)
@@ -266,6 +261,7 @@ class Controller(LeafSystem):
         f_min = -50
         f_max = 50
         for i in range(self.mpc_horizon_length-1):
+            contact_states = trunk_trajectory[i]["contact_states"]
             for j in range(4):
                 if contact_states[j]:
                     # f_z is within f_min and f_max
@@ -335,7 +331,7 @@ class Controller(LeafSystem):
         Calculate the torques because of the swing controller
         """
         # Get the contact states
-        contact_states = trunk_trajectory["contact_states"]
+        contact_states = trunk_trajectory[0]["contact_states"]
 
         # Initialize the torques
         torques = np.zeros(self.mpc_control_dim)
@@ -351,9 +347,9 @@ class Controller(LeafSystem):
                 continue
 
             # Caclulate the desired position, velocity and acceleration
-            p_des_world = trunk_trajectory["p_" + short_names[i]]
-            v_des_world = trunk_trajectory["v_" + short_names[i]]
-            a_des_world = trunk_trajectory["a_" + short_names[i]]
+            p_des_world = trunk_trajectory[0]["p_" + short_names[i]]
+            v_des_world = trunk_trajectory[0]["v_" + short_names[i]]
+            a_des_world = trunk_trajectory[0]["a_" + short_names[i]]
             p_curr_world = self.foot_positions[i]
             v_curr_world = self.foot_velocities[i]
 
@@ -445,8 +441,9 @@ class Controller(LeafSystem):
         A[9:12, self.mpc_state_dim-1] = np.array([0, 0, -1])
 
         # Angular Velocity Dynamics
-        # yaw = trunk_trajectory["rpy"][2] # TODO: Use horizon_idx to get the yaw
-        yaw = self.x_curr[2]
+        diff_yaw = self.x_curr[2] - trunk_trajectory[0]["rpy"][2]
+        yaw = trunk_trajectory[horizon_idx]["rpy"][2] + diff_yaw
+        
         R_yaw = np.array([
             [np.cos(yaw), -np.sin(yaw), 0],
             [np.sin(yaw), np.cos(yaw), 0],
@@ -464,8 +461,8 @@ class Controller(LeafSystem):
         I_moment_world_inv = R_yaw @ self.I_moment_inv @ R_yaw.T
         
         # TODO: Use horizon_idx to get the positions here
-        # com = trunk_trajectory["p_com"]
-        com = self.x_curr[3:6]
+        diff_com = self.x_curr[3:6] - trunk_trajectory[0]["p_com"]
+        com = trunk_trajectory[horizon_idx]["p_com"] + diff_com
         for i in range(4):
             r = self.foot_positions[i] - com
             r_cross = np.array([
