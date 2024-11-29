@@ -1,7 +1,7 @@
 import numpy as np
 from pydrake.all import *
 
-DEBUG = False
+DEBUG = True
 
 class Controller(LeafSystem):
     """
@@ -59,8 +59,8 @@ class Controller(LeafSystem):
 
         # Q and R matrices for the cost function
         # r, p, y, x, y, z, omega_x, omega_y, omega_z, v_x, v_y, v_z, g
-        self.Q = np.diag([5., 5., 10., 20., 20., 50., 2, 2, 2, 2, 2, 2, 0.])
-        self.R = 1e-6 * np.eye(self.mpc_control_dim)
+        self.Q = np.diag([5., 5., 10., 20., 20., 50., 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, .0])
+        self.R = 5e-7 * np.eye(self.mpc_control_dim)
 
         # Quadruped state and trunk trajectory input ports
         self.input_ports = {
@@ -344,6 +344,7 @@ class Controller(LeafSystem):
 
         # Foot names
         foot_names = ["LF_FOOT", "RF_FOOT", "LH_FOOT", "RH_FOOT"]
+        short_names = ["lf", "rf", "lh", "rh"]
 
         # Calculate the torques for each foot
         for i in range(4):
@@ -352,9 +353,9 @@ class Controller(LeafSystem):
                 continue
 
             # Caclulate the desired position, velocity and acceleration
-            p_des_world = trunk_trajectory["a_" + curr_foot]
-            v_des_world = trunk_trajectory["v_" + curr_foot]
-            a_des_world = trunk_trajectory["a_" + curr_foot]
+            p_des_world = trunk_trajectory["p_" + short_names[i]]
+            v_des_world = trunk_trajectory["v_" + short_names[i]]
+            a_des_world = trunk_trajectory["a_" + short_names[i]]
             p_curr_world = self.foot_positions[i]
             v_curr_world = self.foot_velocities[i]
 

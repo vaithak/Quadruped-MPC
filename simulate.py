@@ -14,9 +14,9 @@ def setup_plant_and_builder(
     ground_urdf_path,
     planner_class,
     controller_class,
-    planner_mode = 1,
+    planner_mode = 0,
     dt = 8e-3,
-    mpc_horizon_length = 10,
+    mpc_horizon_length = 15,
     gravity_value = 9.81,
     mu = 1.0,
 ):
@@ -155,7 +155,7 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
     """
     simulator = Simulator(diagram)
     simulator.Initialize()
-    simulator.set_target_realtime_rate(2.0)
+    simulator.set_target_realtime_rate(1.0)
 
     # Set the robot state
     context = simulator.get_mutable_context()
