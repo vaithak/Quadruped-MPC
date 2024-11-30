@@ -169,6 +169,7 @@ class Controller(LeafSystem):
 
         # Calculate the torques
         torques = self.ControlLaw(trunk_trajectory)
+        # torques = np.zeros(self.plant.num_actuators())
 
         # Set the torques
         output.SetFromVector(torques)
@@ -258,8 +259,8 @@ class Controller(LeafSystem):
         ######### Add the force limits on contact feet #########
         # force_z is within f_min and f_max, and the force_x and force_y
         # are within the friction cone
-        f_min = -50
-        f_max = 50
+        f_min = -90
+        f_max = 90
         for i in range(self.mpc_horizon_length-1):
             contact_states = trunk_trajectory[i]["contact_states"]
             for j in range(4):
@@ -461,8 +462,9 @@ class Controller(LeafSystem):
         I_moment_world_inv = R_yaw @ self.I_moment_inv @ R_yaw.T
         
         # TODO: Use horizon_idx to get the positions here
-        diff_com = self.x_curr[3:6] - trunk_trajectory[0]["p_com"]
-        com = trunk_trajectory[horizon_idx]["p_com"] + diff_com
+        # diff_com = self.x_curr[3:6] - trunk_trajectory[0]["p_com"]
+        # com = trunk_trajectory[horizon_idx]["p_com"] + diff_com
+        com = self.x_curr[3:6]
         for i in range(4):
             r = self.foot_positions[i] - com
             r_cross = np.array([

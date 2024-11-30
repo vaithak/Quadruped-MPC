@@ -6,7 +6,7 @@ from pydrake.all import Simulator, DiagramBuilder, AddMultibodyPlantSceneGraph,\
                         Parser, RigidTransform, MeshcatVisualizer, MeshcatVisualizerParams,\
                         HalfSpace, CoulombFriction, StartMeshcat, Box, Sphere, GeometryInstance,\
                         GeometryFrame, MakePhongIllustrationProperties, ContactVisualizer, DiscreteContactApproximation
-import planner
+import planner.planner as planner
 import controller
 
 def setup_plant_and_builder(
@@ -14,11 +14,12 @@ def setup_plant_and_builder(
     ground_urdf_path,
     planner_class,
     controller_class,
-    planner_mode = 2,
+    planner_mode = 3,
     dt = 8e-3,
     mpc_horizon_length = 15,
     gravity_value = 9.81,
     mu = 1.0,
+    foot_clearance = 0.0,
 ):
     """
     Load and visualize a URDF file using Drake's MeshcatVisualizer
@@ -93,6 +94,7 @@ def setup_plant_and_builder(
                             mode=planner_mode, 
                             horizon_length=mpc_horizon_length,
                             dt=dt,
+                            foot_clearance=foot_clearance
                         )
                     )
 
@@ -167,6 +169,13 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
     plant.SetPositions(plant_context, init_state)
     plant.SetVelocities(plant_context, init_state_dot)
 
+    # Print initial coordinates of each foot
+    foot_names = ["LF_FOOT", "RF_FOOT", "LH_FOOT", "RH_FOOT"]
+    for foot_name in foot_names:
+        foot = plant.GetBodyByName(foot_name)
+        x = foot.EvalPoseInWorld(plant_context).translation()
+        print(f"Initial position of the {foot_name}:", x)
+
     # Simulate the robot
     simulator.AdvanceTo(sim_time)
 
@@ -176,7 +185,6 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
         foot = plant.GetBodyByName(foot_name)
         x = foot.EvalPoseInWorld(plant_context).translation()
         print(f"Final position of the {foot_name}:", x)
-    
 
 
 if __name__ == "__main__":
