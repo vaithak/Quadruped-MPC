@@ -4,7 +4,7 @@
 This project was done as my course project at UPenn for MEAM 5170: Controls and Optimization with application in AI and Robotics.
 
 This was my first attempt at implementing MPC from scrach using [Drake simulation software](https://drake.mit.edu/).  
-I had a hard time tuning and making it work, wasn't able to make it walk. Still, below are some decent screenshots of the working controller for basic trajectories.
+I had a hard time tuning and making it work, wasn't able to make it walk. Still, below are some decent screenshots of the working controller for basic standing with different poses.
 
 - Standing on three legs.  
 ![triped](images/triped-rf.png)
