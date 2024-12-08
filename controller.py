@@ -38,6 +38,8 @@ class Controller(LeafSystem):
         # Get the mass and inertia of the trunk
         self.mass = plant.CalcTotalMass(self.plant_context)
         I_moment = plant.GetBodyByName('body').CalcSpatialInertiaInBodyFrame(self.plant_context).CalcRotationalInertia().CopyToFullMatrix3()
+        print("I_moment: \n", I_moment)
+        print("mass: ", self.mass)
         self.I_moment_inv = np.linalg.inv(I_moment)
 
         # Get the actuation matrix
@@ -59,7 +61,7 @@ class Controller(LeafSystem):
 
         # Q and R matrices for the cost function
         # r, p, y, x, y, z, omega_x, omega_y, omega_z, v_x, v_y, v_z, g
-        self.Q = np.diag([5., 5., 10., 20., 20., 50., 2, 2, 2, 2, 2, 2, .0])
+        self.Q = np.diag([5., 5., 50., 10., 50., 50., 1, 1, .1, 0.5, .1, .1, .0])
         self.R = 1e-6 * np.eye(self.mpc_control_dim)
 
         # Quadruped state and trunk trajectory input ports
@@ -102,6 +104,9 @@ class Controller(LeafSystem):
 
         # Store the contact results
         self.contact_results = ContactResults()
+
+        # Store the torques
+        self.torques = np.zeros(self.plant.num_actuators())
 
 
     def get_output_port_by_name(self, name):
@@ -168,11 +173,10 @@ class Controller(LeafSystem):
         trunk_trajectory = self.EvalAbstractInput(context, self.input_ports["trunk_input"]).get_value()
 
         # Calculate the torques
-        torques = self.ControlLaw(trunk_trajectory)
-        # torques = np.zeros(self.plant.num_actuators())
+        self.torques = self.ControlLaw(trunk_trajectory)
 
         # Set the torques
-        output.SetFromVector(torques)
+        output.SetFromVector(self.torques)
 
 
     def ControlLaw(self, trunk_trajectory):
@@ -259,8 +263,8 @@ class Controller(LeafSystem):
         ######### Add the force limits on contact feet #########
         # force_z is within f_min and f_max, and the force_x and force_y
         # are within the friction cone
-        f_min = -90
-        f_max = 90
+        f_min = 0
+        f_max = 200
         for i in range(self.mpc_horizon_length-1):
             contact_states = trunk_trajectory[i]["contact_states"]
             for j in range(4):
@@ -442,15 +446,9 @@ class Controller(LeafSystem):
         A[9:12, self.mpc_state_dim-1] = np.array([0, 0, -1])
 
         # Angular Velocity Dynamics
-        diff_yaw = self.x_curr[2] - trunk_trajectory[0]["rpy"][2]
-        yaw = trunk_trajectory[horizon_idx]["rpy"][2] + diff_yaw
+        R = RollPitchYaw(self.x_curr[0:3]).ToRotationMatrix().matrix()
         
-        R_yaw = np.array([
-            [np.cos(yaw), -np.sin(yaw), 0],
-            [np.sin(yaw), np.cos(yaw), 0],
-            [0, 0, 1]
-        ])
-        A[0:3, 6:9] = R_yaw.T
+        A[0:3, 6:9] = R.T
         ######### Fill in the A matrix #########
 
         ######### Fill in the B matrix #########
@@ -459,7 +457,7 @@ class Controller(LeafSystem):
 
         # Angular Acceleration Dynamics
         # Calculate moment of inertia in world frame
-        I_moment_world_inv = R_yaw @ self.I_moment_inv @ R_yaw.T
+        I_moment_world_inv = R @ self.I_moment_inv @ R.T
         
         # TODO: Use horizon_idx to get the positions here
         # diff_com = self.x_curr[3:6] - trunk_trajectory[0]["p_com"]

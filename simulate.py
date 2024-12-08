@@ -8,18 +8,19 @@ from pydrake.all import Simulator, DiagramBuilder, AddMultibodyPlantSceneGraph,\
                         GeometryFrame, MakePhongIllustrationProperties, ContactVisualizer, DiscreteContactApproximation
 import planner.planner as planner
 import controller
+# from controllers.inverse_dynamics_controller import IDController
 
 def setup_plant_and_builder(
     urdf_path,
     ground_urdf_path,
     planner_class,
     controller_class,
-    planner_mode = 3,
+    planner_mode = 2,
     dt = 8e-3,
-    mpc_horizon_length = 15,
+    mpc_horizon_length = 16,
     gravity_value = 9.81,
     mu = 1.0,
-    foot_clearance = 0.0,
+    foot_clearance = 0.0175
 ):
     """
     Load and visualize a URDF file using Drake's MeshcatVisualizer
@@ -109,6 +110,7 @@ def setup_plant_and_builder(
                 gravity_value = gravity_value,
                 mu = mu
             )
+            # controller_class(plant, dt)
         )
 
     # Connect the trunk-model planner to the scene graph
@@ -169,6 +171,10 @@ def simulate(plant, diagram, init_state, init_state_dot, sim_time):
     plant.SetPositions(plant_context, init_state)
     plant.SetVelocities(plant_context, init_state_dot)
 
+    # Get current state of the plant and print it
+    state = plant.GetPositionsAndVelocities(plant_context)
+    print("Current state of the plant:", state)
+
     # Print initial coordinates of each foot
     foot_names = ["LF_FOOT", "RF_FOOT", "LH_FOOT", "RH_FOOT"]
     for foot_name in foot_names:
@@ -194,6 +200,7 @@ if __name__ == "__main__":
     
     planner_class = planner.Planner
     controller_class = controller.Controller
+    # controller_class = IDController
 
     plant, diagram, scene_graph = setup_plant_and_builder(urdf_path, ground_urdf_path, planner_class, controller_class)
     q = np.zeros((plant.num_positions(),))

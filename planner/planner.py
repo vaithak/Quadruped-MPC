@@ -109,9 +109,11 @@ class Planner(LeafSystem):
 
             "p_com": np.array([0.0, 0.0, 0.3]), # Center of mass
             "v_com": np.array([0.0, 0.0, 0.0]), # Center of mass
+            "a_com": np.array([0.0, 0.0, 0.0]), # Center of mass
 
             "rpy": np.array([0.0, 0.0, 0.0]), # Roll, pitch, yaw
             "rpy_dot": np.array([0.0, 0.0, 0.0]), # Roll, pitch, yaw derivatives
+            "rpy_ddot": np.array([0.0, 0.0, 0.0]) # Roll, pitch, yaw second derivatives
         }
         return output_trajectory
 
@@ -133,29 +135,58 @@ class Planner(LeafSystem):
         off the ground.
         """
         output_trajectory = self.StandingPlan(t)
-        output_trajectory["p_com"] += np.array([-0.01, 0.01, 0.0])
+        # output_trajectory["p_com"] += np.array([-0.01, 0.01, 0.0])
 
         a_foot = 3.0
         floor_t = floor(t)
         frac_t = t - floor_t
-        rise_time = 0.3
+        rise_time = 0.1
         start_time = 1.0
         if t >= start_time and frac_t < rise_time:
             # Lift the right front foot
             output_trajectory["a_rf"] += np.array([ 0.0, 0.0, a_foot])
             output_trajectory["v_rf"] += np.array([ 0.0, 0.0, a_foot * (frac_t)])
             output_trajectory["contact_states"] = [True,False,True,True]
-            output_trajectory["p_rf"] += np.array([ 0.0, 0.0, 0.5 * a_foot * (frac_t)**2])
+            output_trajectory["p_rf"] += np.array([ 0.0, 0.0, self.foot_clearance + 0.5 * a_foot * (frac_t)**2])
 
-        elif t >= start_time and frac_t < 2 * rise_time:
-            # Bring the foot back to the ground
-            dist_start = 0.5 * a_foot * (rise_time**2)
-            output_trajectory["a_rf"] += np.array([ 0.0, 0.0, -a_foot])
-            output_trajectory["v_rf"] += np.array([ 0.0, 0.0, -a_foot * (frac_t - rise_time)])
+            # Also lift the left hind foot
+            # output_trajectory["a_lh"] += np.array([ 0.0, 0.0, a_foot])
+            # output_trajectory["v_lh"] += np.array([ 0.0, 0.0, a_foot * (frac_t)])
+            # output_trajectory["contact_states"] = [True,False,False,True]
+            # output_trajectory["p_lh"] += np.array([ 0.0, 0.0, self.foot_clearance + 0.5 * a_foot * (frac_t)**2])
+
+        # Let it rest at that position for rise_time duration
+        elif t >= start_time and frac_t >= rise_time and frac_t < 2 * rise_time:
+            dist_start = self.foot_clearance + 0.5 * a_foot * (rise_time**2)
+            output_trajectory["a_rf"] = np.array([0.0, 0.0, 0.0])
+            output_trajectory["v_rf"] = np.array([0.0, 0.0, 0.0])
+            output_trajectory["p_rf"] += np.array([0.0, 0.0, dist_start])
             output_trajectory["contact_states"] = [True,False,True,True]
-            output_trajectory["p_rf"] += np.array([ 0.0, 0.0, dist_start - 0.5 * a_foot * (frac_t - rise_time)**2])
+            
+            # output_trajectory["a_lh"] = np.array([0.0, 0.0, 0.0])
+            # output_trajectory["v_lh"] = np.array([0.0, 0.0, 0.0])
+            # output_trajectory["p_lh"] += np.array([0.0, 0.0, dist_start])
+            # output_trajectory["contact_states"] = [True,False,False,True]
 
-        elif t >= start_time and frac_t >= 2 * rise_time:
+        elif t >= start_time and frac_t < 3 * rise_time:
+            # Bring the foot back to the ground
+            dist_start = self.foot_clearance + 0.5 * a_foot * (rise_time**2)
+            output_trajectory["a_rf"] += np.array([ 0.0, 0.0, -a_foot])
+            output_trajectory["v_rf"] += np.array([ 0.0, 0.0, -a_foot * (frac_t - 2*rise_time)])
+            output_trajectory["contact_states"] = [True,False,True,True]
+            output_trajectory["p_rf"] += np.array([ 0.0, 0.0, dist_start - 0.5 * a_foot * (frac_t - 2*rise_time)**2])
+
+            # output_trajectory["a_lh"] += np.array([ 0.0, 0.0, -a_foot])
+            # output_trajectory["v_lh"] += np.array([ 0.0, 0.0, -a_foot * (frac_t - rise_time)])
+            # output_trajectory["contact_states"] = [True,False,False,True]
+            # output_trajectory["p_lh"] += np.array([ 0.0, 0.0, dist_start - 0.5 * a_foot * (frac_t - rise_time)**2])
+
+        elif t >= start_time and frac_t >= 3 * rise_time:
+            output_trajectory["a_rf"] = np.array([0.0, 0.0, 0.0])
+            output_trajectory["v_rf"] = np.array([0.0, 0.0, 0.0])
+            
+            # output_trajectory["a_lh"] = np.array([0.0, 0.0, 0.0])
+            # output_trajectory["v_lh"] = np.array([0.0, 0.0, 0.0])
             output_trajectory["contact_states"] = [True,True,True,True]
 
         return output_trajectory
